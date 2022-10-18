@@ -1,0 +1,13 @@
+[Unit]
+Description=%N
+After=network-online.target
+Requires=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/%N --syslog --configfile=/usr/local/etc/%N.conf
+Type=simple
+KillSignal=SIGTERM
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

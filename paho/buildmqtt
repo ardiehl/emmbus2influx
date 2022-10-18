@@ -1,0 +1,43 @@
+#!/bin/bash
+echo "TGT: $TGT"
+SRCDIR=paho.mqtt.c
+BUILDDIR=paho.mqtt.build
+INSTALLDIR=../mqtt
+[ -f $INSTALLDIR ] && mkdir $INSTALLDIR
+INSTALLDIR=`readlink -f $INSTALLDIR`
+
+[ -d $BUILDDIR ] && rm -rf $BUILDDIR
+if [ -d $BUILDDIR ]; then
+	echo "unable to remove $BUILDDIR"
+	exit 1
+fi
+
+#rm -rf $INSTALLDIR/
+
+if [ -d $SRCDIR ]; then
+	cd $SRCDIR || exit 1
+	git pull || exit 1
+	cd ..
+else
+	git clone https://github.com/eclipse/paho.mqtt.c.git || exit 1
+fi
+
+
+mkdir $BUILDDIR || exit 1
+mkdir -p $INSTALLDIR || exit 1
+cd $BUILDDIR || exit 1
+echo "Building"
+cmake -DCMAKE_INSTALL_PREFIX:PATH=$INSTALLDIR -DPAHO_WITH_SSL=FALSE -DPAHO_BUILD_SHARED=FALSE -DPAHO_BUILD_STATIC=TRUE -DPAHO_BUILD_DOCUMENTATION=FALSE -DPAHO_BUILD_SAMPLES=FALSE ../$SRCDIR && make -j 6 install && rm -f $INSTALLDIR/lib64/*.so* || exit 1
+rm -rf *
+cd .. || exit 1
+
+# build for Victron Energy Cerbos GX
+if [ -f /opt/venus/cerbosgx/environment-setup-cortexa7hf-neon-vfpv4-ve-linux-gnueabi ]; then
+	INSTALLDIR=$INSTALLDIR-gx
+	mkdir -p $INSTALLDIR
+	cd $BUILDDIR || exit 1
+	. /opt/venus/cerbosgx/environment-setup-cortexa7hf-neon-vfpv4-ve-linux-gnueabi
+	cmake -DCMAKE_INSTALL_PREFIX:PATH=$INSTALLDIR -DPAHO_WITH_SSL=FALSE -DPAHO_BUILD_SHARED=FALSE -DPAHO_BUILD_STATIC=TRUE -DPAHO_BUILD_DOCUMENTATION=TRUE -DPAHO_BUILD_SAMPLES=FALSE ../$SRCDIR && make -j 6 install && rm -f $INSTALLDIR/lib64/*.so*
+	rm -rf *
+	cd ..
+fi
