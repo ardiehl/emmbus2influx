@@ -18,7 +18,7 @@ MAKEDIR        = mkdir -p
 RM             = rm -f
 RMRF           = rm -rf
 COPY           = cp
-ARCH           = $(shell uname -m && mkdir -p obj-`uname -m`/influxdb-post && mkdir -p obj-`uname -m`/libmbus/mbus)
+ARCH           = $(shell uname -m && mkdir -p obj-`uname -m`/influxdb-post && mkdir -p obj-`uname -m`/libmbus/mbus &&  mkdir -p obj-`uname -m`/ccronexpr)
 SUDO           = sudo
 INSTALLDIR     = /usr/local
 INSTALLDIR_BIN = $(INSTALLDIR)/bin
@@ -28,7 +28,7 @@ SYSTEMD_RELOAD = systemctl daemon-reload
 
 ALLTARGETS = $(TARGETS:=$(TGT))
 
-CPPFLAGS = -fPIE -g0 -Os -Wall -g -Imqtt$(TGT)/include -Ilibmbus/mbus -DSML_NO_UUID_LIB
+CPPFLAGS = -fPIE -g0 -Os -Wall -g -Imqtt$(TGT)/include -Ilibmbus/mbus -Iccronexpr -DCRON_USE_LOCAL_TIME -DSML_NO_UUID_LIB
 
 # auto generate dependency files
 CPPFLAGS += -MMD
@@ -42,7 +42,7 @@ cleanDebug: clean
 
 LIBS = -lm -lpthread
 OBJDIR       = obj-$(ARCH)$(TGT)
-SOURCES      = $(wildcard *.c influxdb-post/*.c libmbus/mbus/*.c *.cpp)
+SOURCES      = $(wildcard *.c influxdb-post/*.c libmbus/mbus/*.c *.cpp) ccronexpr/ccronexpr.c
 OBJECTS      = $(filter %.o, $(patsubst %.c, $(OBJDIR)/%.o, $(SOURCES)) $(patsubst %.cpp, $(OBJDIR)/%.o, $(SOURCES)))
 MAINOBJS     = $(patsubst %, $(OBJDIR)/%.o,$(TARGETS))
 LINKOBJECTS  = $(filter-out $(MAINOBJS), $(OBJECTS))

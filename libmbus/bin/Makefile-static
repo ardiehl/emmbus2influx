@@ -6,8 +6,8 @@
 # http://www.rSCADA.se
 # info@rscada.se
 #
-CFLAGS=-Wall -g -I..
-LDFLAGS=-L.. -lm -lmbus
+CFLAGS=-Wall -g -I.. -I../mbus
+LDFLAGS=-L.. -L../mbus -lm -lmbus
 
 all: mbus-tcp-scan mbus-tcp-request-data
 

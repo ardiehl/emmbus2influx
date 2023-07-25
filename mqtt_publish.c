@@ -11,7 +11,7 @@ MQTTClient_connectOptions conn_optsDefault = MQTTClient_connectOptions_initializ
 MQTTClient_createOptions createOpsDefault = MQTTClient_createOptions_initializer;
 MQTTClient_message pubmsgDefault = MQTTClient_message_initializer;
 
-mqtt_pubT * mqtt_pub_init (char * hostname, int port, char *  clientId, char *topicPrefix) {
+mqtt_pubT * mqtt_pub_init (const char * hostname, int port, const char *  clientId, const char *topicPrefix) {
 	mqtt_pubT * m;
 	m = calloc(1,sizeof(mqtt_pubT));
 	if (!m) return m;

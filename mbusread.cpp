@@ -841,7 +841,7 @@ int queryMeter(int verboseMsg, meter_t *meter) {
 	int res;
 	char format[50];
 	mbus_frame reply;
-    mbus_frame_data reply_data;
+	mbus_frame_data reply_data;
 
 
 	if (meter->disabled) return 0;
@@ -849,7 +849,7 @@ int queryMeter(int verboseMsg, meter_t *meter) {
 		if (meter->mbusAddress == -1 && meter->mbusId == -1) return 0;		// virtual meter with formulas only
 
 	if (verboseMsg) {
-        if (verboseMsg > 1) printf("\n");
+		if (verboseMsg > 1) printf("\n");
 		if (meter->hostname) printf("Query \"%s\" @ TCP %s:%s, Mbus address %d\n",meter->name,meter->hostname,meter->port == NULL ? "502" : meter->port,meter->mbusAddress);
 		else printf("Query \"%s\" @ mbus serial address %d\n",meter->name,meter->mbusAddress);
 	} else
@@ -878,20 +878,23 @@ int queryMeter(int verboseMsg, meter_t *meter) {
 	assert (meter->mb != NULL);
 	assert (*meter->mb != NULL);
 
+	// TODO: ping needed ?
+	// TOTO: change to mbus_sendrecv_request to handle more than one reply frame
+
 	if (mbus_send_request_frame(*meter->mb, meter->mbusAddress) == -1) {
-        EPRINTFN("Failed to send M-Bus request frame for meter %s @ address %d",meter->name,meter->mbusAddress);
-        return -1;
-    }
+		EPRINTFN("Failed to send M-Bus request frame for meter %s @ address %d",meter->name,meter->mbusAddress);
+		return -1;
+    	}
 
-    if (mbus_recv_frame(*meter->mb, &reply) != MBUS_RECV_RESULT_OK) {
-        EPRINTFN("Failed to receive M-Bus response frame for meter %s @ address %d",meter->name,meter->mbusAddress);
-        return -1;
-    }
+	if (mbus_recv_frame(*meter->mb, &reply) != MBUS_RECV_RESULT_OK) {
+		EPRINTFN("Failed to receive M-Bus response frame for meter %s @ address %d",meter->name,meter->mbusAddress);
+		return -1;
+	}
 
-    if (mbus_frame_data_parse(&reply, &reply_data) == -1) {
-        EPRINTFN("M-bus data parse error on meter %s @ %d: %s",meter->name,meter->mbusAddress,mbus_error_str());
-        return -1;
-    }
+	if (mbus_frame_data_parse(&reply, &reply_data) == -1) {
+		EPRINTFN("M-bus data parse error on meter %s @ %d: %s",meter->name,meter->mbusAddress,mbus_error_str());
+		return -1;
+	}
 
    	if (reply.type == MBUS_DATA_TYPE_ERROR) {
 		EPRINTFN("mbus_frame_data_parse returned MBUS_DATA_TYPE_ERROR, meter %s @ %d: %s",meter->name,meter->mbusAddress);
@@ -900,20 +903,20 @@ int queryMeter(int verboseMsg, meter_t *meter) {
 
     // process
 
-    if (reply_data.type == MBUS_DATA_TYPE_FIXED) {
-        res = process_mbus_data_fixed(meter, &(reply_data.data_fix),verboseMsg);
-        if (!res) return res;
+	if (reply_data.type == MBUS_DATA_TYPE_FIXED) {
+		res = process_mbus_data_fixed(meter, &(reply_data.data_fix),verboseMsg);
+		if (!res) return res;
 	} else
 	if (reply_data.type == MBUS_DATA_TYPE_VARIABLE) {
-        res = process_mbus_data_variable(meter, &(reply_data.data_var),verboseMsg);
-        if (!res) return res;
+		res = process_mbus_data_variable(meter, &(reply_data.data_var),verboseMsg);
+		if (!res) return res;
 	} else {
 		EPRINTFN("unknown data type in returned data, meter %s @ %d: %s",meter->name,meter->mbusAddress);
         return -1;
 	}
 
-    if (reply_data.data_var.record)
-        mbus_data_record_free(reply_data.data_var.record); // free's up the whole list
+	if (reply_data.data_var.record)
+		mbus_data_record_free(reply_data.data_var.record); // free's up the whole list
 
 #ifndef DISABLE_FORMULAS
 	// local formulas

@@ -38,6 +38,7 @@ and send the data to influxdb (1.x or 2.x API) and/or via mqtt
 #endif
 
 #include "MQTTClient.h"
+#include "ccronexpr.h"
 
 #define VER "1.00 Armin Diehl <ad@ardiehl.de> Oct 17,2022, compiled " __DATE__ " " __TIME__
 #define ME "emmbus2influx"
@@ -58,6 +59,7 @@ int formulaTry;
 int scanSerial;
 int modbusDebug;
 influx_client_t *iClient;
+char *cronExpression;
 
 mqtt_pubT *mClient;
 
@@ -171,6 +173,7 @@ int parseArgs (int argc, char **argv) {
 		AP_OPT_INTVALFO     (0,'v',"verbose"        ,&log_verbosity        ,"increase or set verbose level")
 		AP_OPT_INTVALF      (0,'G',"modbusdebug"    ,&modbusDebug          ,"set debug for libmodbus")
 		AP_OPT_INTVAL       (0,'P',"poll"           ,&queryIntervalSecs    ,"poll intervall in seconds")
+		AP_OPT_STRVAL       (0, 'H',"cron"          ,&cronExpression       ,"Crontab style expression like Sec Min Hour Day Mon Wday")
 		AP_OPT_INTVALF      (0,'y',"syslog"         ,&syslog               ,"log to syslog insead of stderr")
 		AP_OPT_INTVALF_CB   (0,'Y',"syslogtest"     ,NULL                  ,"send a testtext to syslog and exit",&syslogTestCallback)
 		AP_OPT_INTVALF_CB   (0,'e',"version"        ,NULL                  ,"show version and exit",&showVersionCallback)
@@ -503,6 +506,16 @@ int influxAppendData (meter_t *meter, uint64_t timestamp) {
 	return regCount;
 }
 
+time_t currTime() {
+#ifdef CRON_USE_LOCAL_TIME
+	time_t t = time(NULL);
+    struct tm *lt = localtime(&t);
+	return mktime(lt);
+#else
+	return time(NULL);
+#endif
+}
+
 
 
 void traceCallback(enum MQTTCLIENT_TRACE_LEVELS level, char *message) {
@@ -516,9 +529,13 @@ int main(int argc, char *argv[]) {
 	meter_t *meter;
 	uint64_t influxTimestamp;
 	struct timespec timeStart, timeEnd;
-	time_t nextQueryTime;
+	char timeStr[50];
+	char currTimeStr[50];
+	time_t nextQueryTime, lastQueryTime, currtime;
 	int isFirstQuery = 1;  // takes longer due to init and/or getting sunspec id's
 	double queryTime;
+	cron_expr cronExpr;
+	const char *errStr = NULL;
 
 	//printf("byte_order: %d\n",__BYTE_ORDER);
 #if 0
@@ -545,7 +562,17 @@ int main(int argc, char *argv[]) {
 	exit(1);
 #endif
 
-
+	if (!cronExpression) {	// we have poll seconds specified, build a cron expression
+		cronExpression = (char *)malloc(30);
+		snprintf(cronExpression,30,"*/%d * * * * *",queryIntervalSecs);
+	}
+	memset(&cronExpr,0,sizeof(cronExpr));
+	cron_parse_expr(cronExpression, &cronExpr, &errStr);
+	if (errStr) {
+		EPRINTF("Error in cron expression: \"%s\"\n",cronExpression);
+		EPRINTFN(errStr);
+		return 1;
+	}
 
 	// open serial port, needed by readMeterDefinitions if we have serial mbus connections
 	if (serDevice)	// not needed if we only have TCP connections
@@ -657,69 +684,81 @@ int main(int argc, char *argv[]) {
 	signal(SIGUSR2, sigusr1_handler);
 
 	LOGN(0,"mainloop started (%s %s)",ME,VER);
+	VPRINTFN(1,"using cron expression \"%s\"",cronExpression);
 
+	lastQueryTime = 0;
 	int loopCount = 0;
 	while (!terminated) {
-		nextQueryTime = time(NULL) + queryIntervalSecs;
-        loopCount++;
-        if (dryrun) printf("- %d -----------------------------------------------------------------------\n",loopCount);
-        if (dryrun || verbose>0) clock_gettime(CLOCK_REALTIME,&timeStart);
-		rc = queryMeters(verbose);
-		clock_gettime(CLOCK_REALTIME,&timeEnd);
-		queryTime = (double)(timeEnd.tv_sec + timeEnd.tv_nsec / NANO_PER_SEC)-(double)(timeStart.tv_sec + timeStart.tv_nsec / NANO_PER_SEC);
-		if (dryrun || verbose>0)
-			printf("Query took %4.2f seconds\n",queryTime);
+		//nextQueryTime = time(NULL) + queryIntervalSecs;
+		nextQueryTime = cron_next(&cronExpr, time(NULL));
+		if (verbose>0) {
+			currtime = time(NULL);
+			ctime_r(&currtime,currTimeStr);
+			VPRINTFN(0,"%s: next query time: %s", currTimeStr, ctime_r(&nextQueryTime,timeStr));
+		}
 
-		if (rc >= 0) {
-			if (iClient) {		// influx
-				influxBufUsed = 0; influxBuf=NULL;
-				influxTimestamp = influxdb_getTimestamp();
-				meter = meters;
-				while(meter) {
-                    if(meter->influxWriteCountdown == 0) {
-                        influxAppendData (meter, influxTimestamp);
-                        meter->influxWriteCountdown = meter->influxWriteMult;
-                    }
-					meter = meter->next;
-				}
-				if (dryrun) {
-                    if (influxBuf) printf("\nDryrun: would send to influxdb:\n%s\n",influxBuf);
-					free(influxBuf); influxBuf = NULL;
-				} else {
-					if (influxBuf) {
-						rc = influxdb_post_http_line(iClient, influxBuf);
-						influxBuf=NULL;
-						if (rc != 0) {
-							LOGN(0,"Error: influxdb_post_http_line failed with rc %d",rc);
+		while(!terminated && (currTime() < nextQueryTime))
+			msleep(100);
+
+		if (!terminated && ((nextQueryTime >= time(NULL)) && nextQueryTime != lastQueryTime)) {
+			lastQueryTime = nextQueryTime;
+			loopCount++;
+			if (dryrun) printf("- %d -----------------------------------------------------------------------\n",loopCount);
+			if (dryrun || verbose>0) clock_gettime(CLOCK_REALTIME,&timeStart);
+			rc = queryMeters(verbose);
+			clock_gettime(CLOCK_REALTIME,&timeEnd);
+			queryTime = (double)(timeEnd.tv_sec + timeEnd.tv_nsec / NANO_PER_SEC)-(double)(timeStart.tv_sec + timeStart.tv_nsec / NANO_PER_SEC);
+			if (dryrun || verbose>0)
+				printf("Query took %4.2f seconds\n",queryTime);
+
+			if (rc >= 0) {
+				if (iClient) {		// influx
+					influxBufUsed = 0; influxBuf=NULL;
+					influxTimestamp = influxdb_getTimestamp();
+					meter = meters;
+					while(meter) {
+						if(meter->meterHasBeenRead && (meter->influxWriteCountdown == 0)) {
+							influxAppendData (meter, influxTimestamp);
+							meter->influxWriteCountdown = meter->influxWriteMult;
 						}
+						meter = meter->next;
+					}
+					if (dryrun) {
+						if (influxBuf) {
+							printf("\nDryrun: would send to influxdb:\n%s\n",influxBuf);
+							free(influxBuf); influxBuf = NULL;
+						}
+					} else {
+						if (influxBuf) {
+							rc = influxdb_post_http_line(iClient, influxBuf);
+							influxBuf=NULL;
+							if (rc != 0) {
+								LOGN(0,"Error: influxdb_post_http_line failed with rc %d",rc);
+							}
+						}
+					}
+				}
+
+				if (mClient) {		// mqtt
+					if (dryrun) printf("Dryrun: would send to mqtt:\n");
+					meter = meters;
+					while(meter) {
+						if (meter->meterHasBeenRead) mqttSendData (meter,dryrun);
+						meter = meter->next;
 					}
 				}
 			}
 
-			if (mClient) {		// mqtt
-				if (dryrun) printf("Dryrun: would send to mqtt:\n");
-				meter = meters;
-				while(meter) {
-					mqttSendData (meter,dryrun);
-					meter = meter->next;
-				}
-
-			}
-		}
-
-		if (time(NULL) >= nextQueryTime && !isFirstQuery)
-			LOGN(0,"Warning: query took more time (%1.2f seconds) than the defined poll interval of %d seconds",queryTime,queryIntervalSecs);
-
-		while (time(NULL) < nextQueryTime && !terminated) {
-			msleep(100);
+			//if (time(NULL) >= nextQueryTime && !isFirstQuery)
+			//	LOGN(0,"Warning: query took more time (%1.2f seconds) than the defined poll interval of %d seconds",queryTime,queryIntervalSecs);
 		}
 
 		if (isFirstQuery) isFirstQuery--;
 
-        if (dryrun) {
-            dryrun--;
-            if (!dryrun) terminated++;
-        }
+		if (dryrun) {
+			dryrun--;
+			if (!dryrun) terminated++;
+		}
 	}
 
 #ifndef DISABLE_FORMULAS
@@ -731,13 +770,14 @@ int main(int argc, char *argv[]) {
 	if (mClient) mqtt_pub_free(mClient);
 	influxdb_post_free(iClient);
 
-    free(configFileName);
+	free(configFileName);
 	free(mqttprefix);
 
 	free(influxMeasurement);
 	free(influxTagName);
 	free(serDevice);
 	freeMeters();
+	free (cronExpression);
 
 	LOGN(0,"terminated");
 

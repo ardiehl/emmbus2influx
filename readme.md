@@ -162,6 +162,7 @@ mqttretain=0
 
 Parameters for MQTT. If mqttserver is not specified, MQTT will be disabled at all (if you would like to use InfluxDB only).
 mqttqos and mqttretain sets the default, these can be overriden per meter or MeterType definition.
+
 __mqttqos__:
 - At most once (0)
 - At least once (1)
@@ -170,6 +171,8 @@ __mqttqos__:
 __mqttretain__:
 - no (0)
 - yes (1)
+
+If mqttretain is set to 1, only changes will be sent to the mqtt server.
 
 ### additional options
 ```
