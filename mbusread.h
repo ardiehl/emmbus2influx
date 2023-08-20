@@ -9,6 +9,8 @@
 // number of queries
 #define TCP_OPEN_RETRY_DELAY 30
 
+#define NANO_PER_SEC 1000000000.0
+
 int mbus_ping_address(mbus_handle *handle, mbus_frame *reply, int address);
 
 int msleep(long msec);
@@ -18,6 +20,12 @@ int mbusSerial_open (const char *device, int baud);
 void mbusSerial_close();
 
 void mbusTCP_freeAll();
+
+void setMeterFvalueInfluxLast (meter_t *meter);
+void setMeterFvalueInflux (meter_t * meter);
+
+void executeMeterFormulas(int verboseMsg, meter_t * meter);
+void executeInfluxWriteCalc (int verboseMsg, meter_t *meter);
 
 int queryMeter(int verboseMsg, meter_t *meter);
 int queryMeters(int verboseMsg);
@@ -37,7 +45,7 @@ void testRegCalcFormula(char * meterName);
 void freeFormulaParser();
 #endif // DISABLE_FORMULAS
 
-void setTarif (int verboseMsg);
+int mbus_showDeviceInfo(int verbose, mbus_handle *mb, uint64_t mbusAddress);
 
 #endif // MODBUSREAD_H_INCLUDED
 

@@ -20,11 +20,11 @@ still work in progress, works but not yet long time tested
  - use of [libmbus](https://github.com/rscada/libmbus) for M-Bus communication
  - use of [paho-c](https://github.com/eclipse/paho.mqtt.c) for MQTT
  - use of [muparser](https://beltoforion.de/en/muparser/) for formula parsing
+ - use of [ccronexpr](https://github.com/staticlibs/ccronexpr) for scheduling using cron expressions
  - paho-c and muparser can by dynamic linked (default) or downloaded, build and linked static automatically when not available on target platform, e.g. Victron Energy Cerbox GX (to be set at the top of Makefile)
 
 ### Restrictions
 - currently only one serial M-Bus interface (=serial port) is supported (can be used by multiple Meters)
-- all Meters will be queried at the specified poll interval, however, InfluxDB writes can be delayed
 
 ### Get started
 
@@ -41,7 +41,7 @@ The config file consists of two sections where the first section ends when [ was
 - second the meter definitions.
 
 Parameters given in the first section can be overridden by command line parameters.
-Example uncomplete config file:
+Example incomplete config file:
 
 ```
 device=/dev/ttyUSB0
@@ -56,9 +56,16 @@ name = "Engelmann_SensoStar"
 measurement="heatMeter"
 influxwritemult=12
 
+[MeterType]
+name = "Itron_BM_m"
+measurement="waterConsumption"
+"serial" = 0,influx=0,mqtt=0
+"m3" = 3,div=1000,dec=2,mqtt=0
+
+
 [Meter]
 type="Engelmann_SensoStar"
-address=0
+address=10
 #hostname="localhost"
 #port="4161"
 measurement="HeatConsumption"
@@ -67,7 +74,7 @@ disabled=0
 ```
 If emmbus2Influx is started with --baud=300 the 2400 baud in the config file will be ignored.
 Comments can be included using #. Everything after # in a line will be ignored.
-Numbers can be specified decimal or, when prefixwed with 0x, hexadecimal.
+Numbers can be specified decimal or, when prefixed with 0x, hexadecimal.
 
 ## command line options or options in the first section of the config file
 
@@ -78,26 +85,26 @@ Long command line options requires to be prefixed with -- while as in the config
   --configfile=           config file name
   -d, --device=           specify serial device name
   --baud=                 baudrate (2400)
-  -m, --measurement=      Influxdb measurement (energyMeter)
+  -m, --measurement=      Influxdb measurement (heatMeter)
   -g, --tagname=          Influxdb tag name (Device)
   -s, --server=           influxdb server name or ip (lnx.armin.d)
   -o, --port=             influxdb port (8086)
   -b, --db=               Influxdb v1 database name
   -u, --user=             Influxdb v1 user name
   -p, --password=         Influxdb v1 password
-  -B, --bucket=           Influxdb v2 bucket (ad)
+  -B, --bucket=           Influxdb v2 bucket (test)
   -O, --org=              Influxdb v2 org (diehl)
   -T, --token=            Influxdb v2 auth api token
   --influxwritemult=      Influx write multiplicator
   -c, --cache=            #entries for influxdb cache (1000)
   -M, --mqttserver=       mqtt server name or ip (lnx.armin.d)
-  -C, --mqttprefix=       prefix for mqtt publish (ad/house/energy/)
+  -C, --mqttprefix=       prefix for mqtt publish (ad/house/heating/)
   -R, --mqttport=         ip port for mqtt server (1883)
   -Q, --mqttqos=          default mqtt QOS, can be changed for meter (0)
   -r, --mqttretain=       default mqtt retain, can be changed for meter (0)
   -v, --verbose[=]        increase or set verbose level
-  -G, --modbusdebug       set debug for libmodbus
   -P, --poll=             poll intervall in seconds
+  -H, --cron=             Crontab style expression like Sec Min Hour Day Mon Wday
   -y, --syslog            log to syslog insead of stderr
   -Y, --syslogtest        send a testtext to syslog and exit
   -e, --version           show version and exit
@@ -106,7 +113,9 @@ Long command line options requires to be prefixed with -- while as in the config
   -t, --try               try to connect returns 0 on success
   --formtryt=             interactive try out formula for register values for a given meter name
   --formtry               interactive try out formula (global for formulas in meter definition)
-  --scanserial            scan for serial mbus devices (0)
+  -1, --scan              scan for serial mbus devices on primary address
+  -2, --scan2             scan for serial mbus devices on secondary address
+
 ```
 
 ### serial port
@@ -180,14 +189,15 @@ If mqttretain is set to 1, only changes will be sent to the mqtt server.
 verbose=0
 syslog
 poll=5
+cron="*/5 * * * * *"
 ```
 
 __verbose__: sets the verbisity level
 __syslog__: enables messages to syslog instead of stdout.
 __poll__: sets the poll interval in seconds
+__cron__: specifies the default poll interval in a crontab style (see schedule definition)
 
 ### command line only parameters
-
 ```
 --configfile=
 --syslogtest
@@ -197,7 +207,8 @@ __poll__: sets the poll interval in seconds
 --try
 --formtryt=MeterName
 --formtry
---scanserial
+--scan
+--scan2
 ```
 __configfile__: sets the config file to use, default is ./emModbus2influx.conf
 **syslogtest**: sends a test message to syslog.
@@ -206,6 +217,24 @@ __configfile__: sets the config file to use, default is ./emModbus2influx.conf
 **try**: try to reach the first defined serial M-Bus device (to detect the serial port in scripts). Return code is 0 if the first device can be reached or 1 on failure.
 **formtryt**: interactively try out a formula for a MeterType
 **formtry**: interactively try out a formula for a Meter
+**scan**: scan for mBus devices using primary address
+**scan2**: scan for mBus devices using secondary address
+## Scan result sample
+```
+user@rpk:/mpeg/prj/solar/emmbus2influx $ ./emmbus2influx --scan
+scanning for mbus serial devices at primary addresses
+9   Found a M-Bus device (Heat: Outlet,EFE,Engelmann / Elster SensoStar 2,Serial: 3175xxxx)
+10  Found a M-Bus device (Heat: Outlet,EFE,Engelmann / Elster SensoStar 2,Serial: 3175xxxx)
+11  Found a M-Bus device (Heat: Outlet,EFE,Engelmann / Elster SensoStar 2,Serial: 3175xxxx)
+12  Found a M-Bus device (Heat: Outlet,EFE,Engelmann / Elster SensoStar 2,Serial: 2077xxxx)
+19  Found a M-Bus device (Water,ACW,Itron BM +m,Serial: 2233xxxx)
+20  Found a M-Bus device (Water,ACW,Itron BM +m,Serial: 2233xxxx)
+21  Found a M-Bus device (Water,ACW,Itron BM +m,Serial: 2233xxxx)
+22  Found a M-Bus device (Water,ACW,Itron BM +m,Serial: 2233xxxx)
+30  Found a M-Bus device (Heat: Outlet,EFE,Engelmann / Elster SensoStar 2,Serial: 3175xxxx)
+31  Found a M-Bus device (Heat: Outlet,EFE,Engelmann / Elster SensoStar 2,Serial: 3175xxxx)
+
+```
 
 # MeterType definitions
 Defines a meter type. A meter type is the base definition and can be used within multiple meters. It defines registers and register options for M-Bus. Registers can be values from records, values plus a formula or formula only registers. Additional formula only registers can be added in a meter definition.
@@ -277,6 +306,29 @@ for each register,
 "p" = "p1+p2+p3",float,influx=0,iavg
 "kwh"=0x0040,int32,force=int,div=10,imax
 ```
+
+# Schedule definitions
+Defines schedule times for querying meters. There is always a default schedule defines by poll= or by cron=. A meter can be part of one or more schedules with schedule="scheduleName"[,..].
+The implementation is based on https://github.com/staticlibs/ccronexpr and is like cron with the addition of the first paramater (seconds).
+Some examples for expressions:
+```
+"0 0 * * * *"          = the top of every hour of every day
+"*/10 * * * * *"       = every ten seconds
+"0 0 8-10 * * *"       = 8, 9 and 10 o'clock of every day
+"0 0/30 8-10 * * *"    = 8:00, 8:30, 9:00, 9:30 and 10 o'clock every day
+"0 0 9-17 * * MON-FRI" = on the hour nine-to-five weekdays
+"0 0 0 25 12 ?"        = every Christmas Day at midnight
+
+```
+From my config file:
+```
+[Schedule]
+#Sensors underfloor heating - Every 15 minutes
+"s_TempFBH" = "0 */15 * * * *"
+#Heatpump every minute
+"s_Heatpump" = "4 */1 * * * *"
+```
+
 
 #### Options
 
@@ -359,3 +411,4 @@ disabled=0
 "u1_avg"="(Grid.u1+Grid.u2+Grid.u3)/3",dec=2,influx=1,mqtt=1
 ```
 Options supported are dec=, influx=, mqtt=, arr=, imax, imin and iavg
+

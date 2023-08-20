@@ -5,8 +5,8 @@
 #include "argparse.h"
 #include "log.h"
 #include "mbusread.h"
-#include "parser.h"
 #include <endian.h>
+#include "cron.h"
 
 extern int mqttQOS;
 extern int mqttRetain;
@@ -372,6 +372,15 @@ int parseMeterType (parser_t * pa) {
 	if (!meterType->name) parserError(pa,"meter type definition without name");
 	if (!meterType->meterRegisters) parserError(pa,"\"%s\": meter type definition without registers",meterType->name);
 
+	meterType->isFormulaOnly = 1;
+        meterType->numEnabledRegisters_influx = 0;
+        meterRegister = meterType->meterRegisters;
+        while (meterRegister) {
+                        if (! meterRegister->isFormulaOnly) meterType->isFormulaOnly = 0;
+                        meterType->numEnabledRegisters_influx += meterRegister->enableInfluxWrite;
+                        meterRegister = meterRegister->next;
+        }
+
 	// store meter type
 	if (meterTypes) {
 		meterType_t * mt = meterTypes;
@@ -401,6 +410,16 @@ int parseMeter (parser_t * pa) {
 	//printf("tk2: %d, %s\n",tk,parserGetTokenTxt(pa,tk));
 	while (tk != TK_SECTION && tk != TK_EOF) {
 		switch(tk) {
+			case TK_SCHEDULE:
+				parserExpectEqual(pa,TK_STRVAL);
+				cron_meter_add_byName(pa->strVal,meter);
+				while (tk == TK_COMMA) {
+					tk = parserGetToken(pa);
+					parserExpect(pa,TK_STRVAL);
+					cron_meter_add_byName(pa->strVal,meter);
+					tk = parserGetToken(pa);
+				}
+				break;
             case TK_PORT:
                 parserExpectEqual(pa,TK_STRVAL);
 				meter->port=strdup(pa->strVal);
@@ -454,7 +473,7 @@ int parseMeter (parser_t * pa) {
 				meter->meterType = findMeterType(pa->strVal);
 				if (!meter->meterType) parserError(pa,"undefined meter type ('%s')",pa->strVal);
 				meter->numEnabledRegisters_mqtt = meter->meterType->numEnabledRegisters_mqtt;
-				meter->numEnabledRegisters_influx = meter->meterType->numEnabledRegisters_influx;
+				meter->numEnabledRegisters_influx += meter->meterType->numEnabledRegisters_influx;
 				if (meter->meterType->mqttprefix) {
 					free(meter->mqttprefix);
 					meter->mqttprefix = strdup(meter->meterType->mqttprefix);
@@ -476,6 +495,12 @@ int parseMeter (parser_t * pa) {
 					parserError(pa,"a meter with the name \"%s\" is already defined",pa->strVal);
 				checkAllowedChars (pa,meter->name);
 				VPRINTFN(4,"parseMeter %s",pa->strVal);
+				break;
+			case TK_INAME:
+				if (meter->iname) parserError(pa,"%s: duplicate meter iname in meter definition",meter->name);
+				parserExpectEqual(pa,TK_STRVAL);
+				meter->iname = strdup(pa->strVal);
+				checkAllowedChars (pa,meter->iname);
 				break;
 			case TK_HOSTNAME:
 				if (meter->hostname) parserError(pa,"duplicate hostname");
@@ -589,7 +614,7 @@ int parseMeter (parser_t * pa) {
 
 
 			default:
-				strncpy(errMsg,"unexpected identifier ",sizeof(errMsg)-1);
+				strncpy(errMsg,"parseMeter: unexpected identifier ",sizeof(errMsg)-1);
 				if (tk != TK_IDENT) strncat(errMsg,parserGetTokenTxt(pa,tk),sizeof(errMsg)-1);
 				else strncat(errMsg,pa->strVal,sizeof(errMsg)-1);
 				parserError (pa,errMsg);
@@ -639,6 +664,17 @@ int parseMeter (parser_t * pa) {
 		}
 	}
 	if (meter->influxWriteMult) meter->influxWriteCountdown = -1; // meter->influxWriteMult;
+
+	if (meter->meterType)
+		meter->isFormulaOnly = meter->meterType->isFormulaOnly;
+	else
+		meter->isFormulaOnly = 1;
+
+	meterFormula = meter->meterFormula;
+	while (meterFormula) {
+		if (meterFormula->enableInfluxWrite) meter->numEnabledRegisters_influx++;
+		meterFormula = meterFormula->next;
+	}
 
 	return tk;
 }
@@ -698,7 +734,10 @@ int readMeterDefinitions (const char * configFileName) {
 		"imax"            ,TK_IMAX,
 		"imin"            ,TK_IMIN,
 		"iavg"            ,TK_IAVG,
-		"modbusdebug"     ,TK_MODBUSDEBUG,
+		//"modbusdebug"     ,TK_MODBUSDEBUG,
+		"default"         ,TK_DEFAULT,
+		"schedule"        ,TK_SCHEDULE,
+		"iname"           ,TK_INAME,
 		NULL);
 	rc = parserBegin (pa, configFileName, 1);
 	if (rc != 0) {
@@ -712,6 +751,9 @@ int readMeterDefinitions (const char * configFileName) {
 			tk = parseMeterType(pa);
 		else if (strcasecmp(pa->strVal,"Meter") == 0)
 			tk = parseMeter(pa);
+		else if (strcasecmp(pa->strVal,"Schedule") == 0)
+			tk = parseCron(pa);
+
 		else
 			parserError(pa,"unknown section type %s",pa->strVal);
 	}
@@ -729,7 +771,7 @@ int readMeterDefinitions (const char * configFileName) {
 			//meter->mb = modbus_new_tcp_pi(meter->hostname, const char *service);
 			//do the open when querying the meter to be able to retry of temporary not available
 		} else {	// modbus RTU
-			if ((meter->mbusAddress > -1 || meter->mbusId > -1) && meter->disabled == 0) {
+			if ((meter->mbusAddress > 0 || meter->mbusId > -1) && meter->disabled == 0) {
 				meter->mb = mbusSerial_getmh();
 				if (*meter->mb == NULL) {
 					EPRINTFN("%s: serial mbus not yet opened or no serial device specified",meter->name);

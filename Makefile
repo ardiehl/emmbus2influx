@@ -142,8 +142,8 @@ install: $(ALLTARGETS)
 	$(SUDO) $(MAKEDIR) $(INSTALLDIR_CFG)
 	$(SUDO) $(MAKEDIR) $(INSTALLDIR_SYS)
 	$(SUDO) $(COPY) $(TARGETS) $(INSTALLDIR_BIN)
-	$(SUDO) $(COPY) emModbus2influx.service $(INSTALLDIR_SYS)
-#	$(SUDO) $(COPY) emModbus2influx.conf $(INSTALLDIR_CFG)
+	$(SUDO) $(COPY) emmbus2influx.service $(INSTALLDIR_SYS)
+#	$(SUDO) $(COPY) emmbus2influx.conf $(INSTALLDIR_CFG)
 	$(SUDO) $(SYSTEMD_RELOAD)
 
 clean:

@@ -38,9 +38,8 @@ and send the data to influxdb (1.x or 2.x API) and/or via mqtt
 #endif
 
 #include "MQTTClient.h"
-#include "ccronexpr.h"
-
-#define VER "1.00 Armin Diehl <ad@ardiehl.de> Oct 17,2022, compiled " __DATE__ " " __TIME__
+#include "cron.h"
+#define VER "1.02 Armin Diehl <ad@ardiehl.de> Aug 20,2023, compiled " __DATE__ " " __TIME__
 #define ME "emmbus2influx"
 #define CONFFILE "emmbus2influx.conf"
 
@@ -56,8 +55,9 @@ int dryrun;
 int queryIntervalSecs = 60 * 60 * 2;	// seconds = 2 hours
 char *formulaValMeterName;
 int formulaTry;
-int scanSerial;
-int modbusDebug;
+int scan1;
+int scan2;
+
 influx_client_t *iClient;
 char *cronExpression;
 
@@ -171,7 +171,6 @@ int parseArgs (int argc, char **argv) {
 		AP_OPT_INTVAL       (1,'Q',"mqttqos"        ,&mqttQOS              ,"default mqtt QOS, can be changed for meter")
 		AP_OPT_INTVAL       (1,'r',"mqttretain"     ,&mqttRetain           ,"default mqtt retain, can be changed for meter")
 		AP_OPT_INTVALFO     (0,'v',"verbose"        ,&log_verbosity        ,"increase or set verbose level")
-		AP_OPT_INTVALF      (0,'G',"modbusdebug"    ,&modbusDebug          ,"set debug for libmodbus")
 		AP_OPT_INTVAL       (0,'P',"poll"           ,&queryIntervalSecs    ,"poll intervall in seconds")
 		AP_OPT_STRVAL       (0, 'H',"cron"          ,&cronExpression       ,"Crontab style expression like Sec Min Hour Day Mon Wday")
 		AP_OPT_INTVALF      (0,'y',"syslog"         ,&syslog               ,"log to syslog insead of stderr")
@@ -182,7 +181,8 @@ int parseArgs (int argc, char **argv) {
 		AP_OPT_INTVALF      (0,'t',"try"            ,&doTry                ,"try to connect returns 0 on success")
 		AP_OPT_STRVAL       (0, 0 ,"formtryt"       ,&formulaValMeterName  ,"interactive try out formula for register values for a given meter name")
 		AP_OPT_INTVALF      (0, 0 ,"formtry"        ,&formulaTry           ,"interactive try out formula (global for formulas in meter definition)")
-		AP_OPT_INTVALF      (1, 0 ,"scanserial"     ,&scanSerial           ,"scan for serial mbus devices")
+		AP_OPT_INTVALF      (0,'1',"scan"           ,&scan1                ,"scan for serial mbus devices on primary address")
+		AP_OPT_INTVALF      (0,'2',"scan2"          ,&scan2                ,"scan for serial mbus devices on secondary address")
 	AP_END;
 
 	// check if we have a configfile argument
@@ -406,6 +406,8 @@ int mqttSendData (meter_t * meter,int dryrun) {
                 first = 0;
                 appendValue(1,rr,&buf,&buflen,&bufsize);
             }
+        } else {
+			printf("%s: enableMqttWrite=0\n",rr->registerDef->name);
         }
 		rr = rr->next;
 	}
@@ -466,16 +468,22 @@ int influxAppendData (meter_t *meter, uint64_t timestamp) {
 	if (meter->influxTagName) tagname = meter->influxTagName;
 
 	// check if we have something to write
-	if (meter->disabled) return 0;
-	if (! meter->numEnabledRegisters_influx) return 0;
+	if (meter->disabled) {
+		VPRINTFN(2,"%s; influx: meter is disabled");
+		return 0;
+	}
+	if (! meter->numEnabledRegisters_influx) {
+		VPRINTFN(2,"%s; influx: no enabled registers",meter->name);
+		return 0;
+	}
 
-	influxBufUsed = influxdb_format_line(&influxBuf, &influxBufLen, influxBufUsed, INFLUX_MEAS(measurement), INFLUX_TAG(tagname, meter->name),INFLUX_END);
+	influxBufUsed = influxdb_format_line(&influxBuf, &influxBufLen, influxBufUsed, INFLUX_MEAS(measurement), INFLUX_TAG(tagname, meter->iname ? meter->iname : meter->name),INFLUX_END);
 	if (influxBufUsed < 0) { EPRINTFN("influxdb_format_line failed, INFLUX_MEAS"); exit(1); }
 
     rr = meter->registerRead;
 	while (rr) {
         if (rr->registerDef->enableInfluxWrite) {
-            if (rr->isInt) {
+            if (rr->isInt || rr->registerDef->forceType == force_int) {
                 influxBufUsed = influxdb_format_line(&influxBuf, &influxBufLen, influxBufUsed, INFLUX_F_INT(rr->registerDef->name, (int)rr->fvalueInflux), INFLUX_END);
                 if (influxBufUsed < 0) { EPRINTFN("influxdb_format_line failed, INFLUX_F_INT"); exit(1); }
             } else {
@@ -522,20 +530,114 @@ void traceCallback(enum MQTTCLIENT_TRACE_LEVELS level, char *message) {
 	printf(message); printf("\n");
 }
 
-#define NANO_PER_SEC 1000000000.0
+
+
+//------------------------------------------------------------------------------
+// Iterate over all address masks according to the M-Bus probe algorithm.
+//------------------------------------------------------------------------------
+int mbus_scan_2nd_address_range(mbus_handle * handle, int pos, char *addr_mask)
+{
+    int i, i_start=0, i_end=0, probe_ret;
+    uint64_t mbusAddress;
+    char *mask, matching_mask[17];
+
+    if (handle == NULL || addr_mask == NULL)
+    {
+        EPRINTF("%s: Invalid handle or address mask.\n", __PRETTY_FUNCTION__);
+        return -1;
+    }
+
+    if (strlen(addr_mask) != 16)
+    {
+        EPRINTF("%s: Illegal address mask [%s]. Not 16 characters long.\n", __PRETTY_FUNCTION__, addr_mask);
+        return -1;
+    }
+
+    if (pos < 0 || pos >= 16)
+    {
+        return 0;
+    }
+
+    if ((mask = strdup(addr_mask)) == NULL)
+    {
+        EPRINTF("%s: Failed to allocate local copy of the address mask.\n", __PRETTY_FUNCTION__);
+        return -1;
+    }
+
+    if (mask[pos] == 'f' || mask[pos] == 'F')
+    {
+        // mask[pos] is a wildcard -> enumerate all 0..9 at this position
+        i_start = 0;
+        i_end   = 9;
+    }
+    else
+    {
+        if (pos < 15)
+        {
+            // mask[pos] is not a wildcard -> don't iterate, recursively check pos+1
+            mbus_scan_2nd_address_range(handle, pos+1, mask);
+        }
+        else
+        {
+            // .. except if we're at the last pos (==15) and this isn't a wildcard we still need to send the probe
+            i_start = (int)(mask[pos] - '0');
+            i_end   = (int)(mask[pos] - '0');
+        }
+    }
+
+    // skip the scanning if we're returning from the (pos < 15) case above
+    if (mask[pos] == 'f' || mask[pos] == 'F' || pos == 15)
+    {
+        for (i = i_start; i <= i_end; i++)
+        {
+            mask[pos] = '0'+i;
+
+            if (handle->scan_progress)
+                handle->scan_progress(handle,mask);
+
+            probe_ret = mbus_probe_secondary_address(handle, mask, matching_mask);
+
+            if (probe_ret == MBUS_PROBE_SINGLE)
+            {
+                if (!handle->found_event)
+                {
+                    printf("Found a device on address %s [using address mask %s]", matching_mask, mask);
+                    mbusAddress = strtol(matching_mask,NULL,16);
+                    mbus_showDeviceInfo(1, handle, mbusAddress);
+                    printf("\n");
+                }
+            }
+            else if (probe_ret == MBUS_PROBE_COLLISION)
+            {
+                // collision, more than one device matching, restrict the search mask further
+                mbus_scan_2nd_address_range(handle, pos+1, mask);
+            }
+            else if (probe_ret == MBUS_PROBE_NOTHING)
+            {
+                 // nothing... move on to next address mask
+            }
+            else // MBUS_PROBE_ERROR
+            {
+                EPRINTF("%s: Failed to probe secondary address [%s].\n", __PRETTY_FUNCTION__, mask);
+                return -1;
+            }
+        }
+    }
+
+    free(mask);
+    return 0;
+}
+
+
 
 int main(int argc, char *argv[]) {
 	int rc,i;
 	meter_t *meter;
 	uint64_t influxTimestamp;
 	struct timespec timeStart, timeEnd;
-	char timeStr[50];
-	char currTimeStr[50];
-	time_t nextQueryTime, lastQueryTime, currtime;
 	int isFirstQuery = 1;  // takes longer due to init and/or getting sunspec id's
 	double queryTime;
-	cron_expr cronExpr;
-	const char *errStr = NULL;
+
 
 	//printf("byte_order: %d\n",__BYTE_ORDER);
 #if 0
@@ -562,17 +664,12 @@ int main(int argc, char *argv[]) {
 	exit(1);
 #endif
 
-	if (!cronExpression) {	// we have poll seconds specified, build a cron expression
+	if (!cronExpression) {	// if we have poll seconds specified, build a cron expression
 		cronExpression = (char *)malloc(30);
 		snprintf(cronExpression,30,"*/%d * * * * *",queryIntervalSecs);
 	}
-	memset(&cronExpr,0,sizeof(cronExpr));
-	cron_parse_expr(cronExpression, &cronExpr, &errStr);
-	if (errStr) {
-		EPRINTF("Error in cron expression: \"%s\"\n",cronExpression);
-		EPRINTFN(errStr);
-		return 1;
-	}
+	// add default schedule
+	cron_add(NULL,cronExpression);
 
 	// open serial port, needed by readMeterDefinitions if we have serial mbus connections
 	if (serDevice)	// not needed if we only have TCP connections
@@ -581,7 +678,7 @@ int main(int argc, char *argv[]) {
 			exit(3);
 		}
 
-	if (scanSerial) {
+	if (scan1) {
 		if (! serDevice) {
 			EPRINTFN("scanserial: no serial port specified");
 			exit(1);
@@ -589,8 +686,8 @@ int main(int argc, char *argv[]) {
 		mbus_handle ** mb = mbusSerial_getmh();
 
 		printf("scanning for mbus serial devices at primary addresses\n");
-		for (i=0;i<=MBUS_MAX_PRIMARY_SLAVES;i++) {
-			printf("\r%d ",i); fflush(stdout);
+		for (i=1;i<=MBUS_MAX_PRIMARY_SLAVES;i++) {
+			printf("\r%-3d ",i); fflush(stdout);
 			mbus_frame reply;
 			rc = mbus_ping_address(*mb, &reply, i);
 
@@ -607,13 +704,27 @@ int main(int argc, char *argv[]) {
 					printf("Collision at address %d\n", i);
 					continue;
 				}
-				printf("Found a M-Bus device at address %d\n", i);
+				printf("Found a M-Bus device");
+				mbus_showDeviceInfo(0,*mb,i);
+				printf("\n");
 			}
 		}
 		exit(0);
 	}
 
+	if (scan2) {
+		if (! serDevice) {
+			EPRINTFN("scanserial: no serial port specified");
+			exit(1);
+		}
+		mbus_handle ** mb = mbusSerial_getmh();
+		mbus_scan_2nd_address_range(*mb, 0, (char *)"FFFFFFFFFFFFFFFF");
+		exit(0);
+	}
+
 	readMeterDefinitions (configFileName);
+	cron_setDefault();
+	if (verbose) cron_showSchedules();
 
 	if (dumpRegisters) {
 		printf("Querying all meters\n" \
@@ -675,6 +786,18 @@ int main(int argc, char *argv[]) {
 	    exit(1);
 	}
 
+	if (verbose > 2) {
+		meter = meters;
+		printf("Name                            TCP schedules f mqtt influx\n");
+		printf("------------------------------------------------------------\n");
+		while(meter) {
+			printf("%-30s %4d %9d %1d %4d %6d\n",meter->name,meter->isTCP,meter->hasSchedule,meter->isFormulaOnly,meter->numEnabledRegisters_mqtt,meter->numEnabledRegisters_influx);
+			meter = meter->next;
+		}
+		printf("\n");
+	}
+
+
 	// term handler for ^c and SIGTERM send by systemd
 	//signal(SIGKILL, sigterm_handler);
 	signal(SIGTERM, sigterm_handler);
@@ -684,82 +807,81 @@ int main(int argc, char *argv[]) {
 	signal(SIGUSR2, sigusr1_handler);
 
 	LOGN(0,"mainloop started (%s %s)",ME,VER);
-	VPRINTFN(1,"using cron expression \"%s\"",cronExpression);
 
-	lastQueryTime = 0;
+
+	// do an initial query but do not write to influx / mqtt (init / init sunspec)
+	clock_gettime(CLOCK_REALTIME,&timeStart);
+	rc = queryMeters(verbose);
+	clock_gettime(CLOCK_REALTIME,&timeEnd);
+	queryTime = (double)(timeEnd.tv_sec + timeEnd.tv_nsec / NANO_PER_SEC)-(double)(timeStart.tv_sec + timeStart.tv_nsec / NANO_PER_SEC);
+	if (dryrun || verbose>0)
+		printf("Initial query took %4.2f seconds\n",queryTime);
+	if (rc <= 0) {
+		terminated++;
+		EPRINTFN("Initial query: no meters could be queried");
+		msleep(5000);
+	}
+
 	int loopCount = 0;
 	while (!terminated) {
-		//nextQueryTime = time(NULL) + queryIntervalSecs;
-		nextQueryTime = cron_next(&cronExpr, time(NULL));
-		if (verbose>0) {
-			currtime = time(NULL);
-			ctime_r(&currtime,currTimeStr);
-			VPRINTFN(0,"%s: next query time: %s", currTimeStr, ctime_r(&nextQueryTime,timeStr));
-		}
-
-		while(!terminated && (currTime() < nextQueryTime))
-			msleep(100);
-
-		if (!terminated && ((nextQueryTime >= time(NULL)) && nextQueryTime != lastQueryTime)) {
-			lastQueryTime = nextQueryTime;
-			loopCount++;
-			if (dryrun) printf("- %d -----------------------------------------------------------------------\n",loopCount);
-			if (dryrun || verbose>0) clock_gettime(CLOCK_REALTIME,&timeStart);
-			rc = queryMeters(verbose);
+		msleep(100);
+		clock_gettime(CLOCK_REALTIME,&timeStart);
+		rc = cron_queryMeters(verbose);
+		if (rc > 0) {
 			clock_gettime(CLOCK_REALTIME,&timeEnd);
+			loopCount++;
+			//if (dryrun) printf("- %d -----------------------------------------------------------------------\n",loopCount);
 			queryTime = (double)(timeEnd.tv_sec + timeEnd.tv_nsec / NANO_PER_SEC)-(double)(timeStart.tv_sec + timeStart.tv_nsec / NANO_PER_SEC);
 			if (dryrun || verbose>0)
-				printf("Query took %4.2f seconds\n",queryTime);
+				printf("Query %d took %4.2f seconds\n",loopCount,queryTime);
 
-			if (rc >= 0) {
-				if (iClient) {		// influx
-					influxBufUsed = 0; influxBuf=NULL;
-					influxTimestamp = influxdb_getTimestamp();
-					meter = meters;
-					while(meter) {
-						if(meter->meterHasBeenRead && (meter->influxWriteCountdown == 0)) {
-							influxAppendData (meter, influxTimestamp);
-							meter->influxWriteCountdown = meter->influxWriteMult;
-						}
-						meter = meter->next;
+			if (iClient) {		// influx
+				influxBufUsed = 0; influxBuf=NULL;
+				influxTimestamp = influxdb_getTimestamp();
+				meter = meters;
+				while(meter) {
+					if(meter->meterHasBeenRead && (meter->influxWriteCountdown == 0)) {
+						influxAppendData (meter, influxTimestamp);
+						meter->influxWriteCountdown = meter->influxWriteMult;
 					}
-					if (dryrun) {
-						if (influxBuf) {
-							printf("\nDryrun: would send to influxdb:\n%s\n",influxBuf);
-							free(influxBuf); influxBuf = NULL;
-						}
-					} else {
-						if (influxBuf) {
-							rc = influxdb_post_http_line(iClient, influxBuf);
-							influxBuf=NULL;
-							if (rc != 0) {
-								LOGN(0,"Error: influxdb_post_http_line failed with rc %d",rc);
-							}
-						}
-					}
+					meter = meter->next;
 				}
-
-				if (mClient) {		// mqtt
-					if (dryrun) printf("Dryrun: would send to mqtt:\n");
-					meter = meters;
-					while(meter) {
-						if (meter->meterHasBeenRead) mqttSendData (meter,dryrun);
-						meter = meter->next;
+				if (dryrun) {
+					if (influxBuf) {
+						printf("\nDryrun: would send to influxdb:\n%s\n",influxBuf);
+						free(influxBuf); influxBuf = NULL;
+					}
+				} else {
+					if (influxBuf) {
+						rc = influxdb_post_http_line(iClient, influxBuf);
+						influxBuf=NULL;
+						if (rc != 0) {
+							LOGN(0,"Error: influxdb_post_http_line failed with rc %d",rc);
+						}
 					}
 				}
 			}
 
-			//if (time(NULL) >= nextQueryTime && !isFirstQuery)
-			//	LOGN(0,"Warning: query took more time (%1.2f seconds) than the defined poll interval of %d seconds",queryTime,queryIntervalSecs);
-		}
+			if (mClient) {		// mqtt
+				if (dryrun) printf("Dryrun: would send to mqtt:\n");
+				meter = meters;
+				while(meter) {
+					//if (meter->meterHasBeenRead)
+					mqttSendData (meter,dryrun);
+					//else if (dryrun) printf(" %s: has not been read ",meter->name);
+					meter = meter->next;
+				}
+				if (dryrun) printf("\n");
+			}
+			if (isFirstQuery) isFirstQuery--;
 
-		if (isFirstQuery) isFirstQuery--;
-
-		if (dryrun) {
-			dryrun--;
-			if (!dryrun) terminated++;
+			if (dryrun) {
+				dryrun--;
+				if (!dryrun) terminated++;
+			}
 		}
 	}
+
 
 #ifndef DISABLE_FORMULAS
 	freeFormulaParser();

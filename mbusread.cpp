@@ -320,18 +320,18 @@ void executeMeterFormulas(int verboseMsg, meter_t * meter) {
     meterFormula_t * mf = meter->meterFormula;
     mu::Parser *parser = NULL;
     if (!mf) return;
-    if (verbose || verboseMsg)
+    if (verbose > 1)
 		printf("\nexecuteMeterFormulas for \"%s\"\n",meter->name);
     while(mf) {
         if (!parser) parser = initParser();
         try {
             parser->SetExpr(mf->formula);
             mf->fvalue = parser->Eval();
-            if (verbose || verboseMsg)
+            if (verbose > 1)
 				printf("%s \"%s\" %10.2f\n",mf->name,mf->formula,mf->fvalue);
         }
         catch (mu::Parser::exception_type &e) {
-            EPRINTFN("%d.%d error evaluating meter formula (%s)",meter->name,mf->name,e.GetMsg().c_str());
+            EPRINTFN("%s.%s error evaluating meter formula (%s)",meter->name,mf->name,e.GetMsg().c_str());
             exit(1);
         }
         mf = mf->next;
@@ -399,7 +399,7 @@ void listOperators(mu::Parser *parser) {
     }
     printf("\n? and : can be used like in c, for example to have an alarm for voltage:\n"\
            " VoltageL1 > 240 ? 1:0 || VoltageL2 > 240 ? 1:0 || VoltageL3 > 240 ? 1:0 ||  Inverter.Voltage > 240 ? 1 : 0\n"\
-           "This will return 1 of any of the four voltages are above 240.\n\n");
+           "This will return 1 ff any of the four voltages are above 240.\n\n");
 }
 
 
@@ -635,12 +635,11 @@ void executeInfluxWriteCalc (int verboseMsg, meter_t *meter) {
 }
 
 
-void setfvalueInfluxLast () {
-    meter_t *meter = meters;
-    meterRegisterRead_t *mrrd;
+void setMeterFvalueInfluxLast (meter_t *meter) {
+	meterRegisterRead_t *mrrd;
     meterFormula_t *mf;
 
-    while (meter) {
+    if (meter) {
         mrrd = meter->registerRead;
         while (mrrd) {
             mrrd->fvalueInfluxLast = mrrd->fvalueInflux;
@@ -651,17 +650,24 @@ void setfvalueInfluxLast () {
             mf->fvalueInfluxLast = mf->fvalueInflux;
             mf = mf->next;
         }
+    }
+}
+
+void setfvalueInfluxLast () {
+    meter_t *meter = meters;
+
+    while (meter) {
+		setMeterFvalueInfluxLast (meter);
         meter = meter->next;
     }
 }
 
 
-void setfvalueInflux () {
-    meter_t *meter = meters;
+void setMeterFvalueInflux (meter_t * meter) {
     meterRegisterRead_t *mrrd;
     meterFormula_t *mf;
 
-    while (meter) {
+    if (meter) {
         mrrd = meter->registerRead;
 
         while (mrrd) {
@@ -673,6 +679,15 @@ void setfvalueInflux () {
             mf->fvalueInflux = mf->fvalue;
             mf = mf->next;
         }
+    }
+}
+
+
+void setfvalueInflux () {
+    meter_t *meter = meters;
+
+    while (meter) {
+		setMeterFvalueInflux(meter);
         meter = meter->next;
     }
 }
@@ -810,7 +825,7 @@ int process_mbus_data_variable(meter_t * meter, mbus_data_variable *data, int ve
     medium = strdup(mbus_data_variable_medium_lookup(data->header.medium));
     manufacturer = strdup(mbus_decode_manufacturer(data->header.manufacturer[0], data->header.manufacturer[1]));
 
-    if (verboseMsg) printf("%s (manufacturer: %s, version: %d, status: %d, medium: %s, access: %d)\n",meter->name,manufacturer,data->header.version,data->header.status,medium,data->header.access_no);
+    if (verbose > 2) printf("%s (manufacturer: %s, version: %d, status: %d, medium: %s, access: %d)\n",meter->name,manufacturer,data->header.version,data->header.status,medium,data->header.access_no);
 
     for (record = data->record, i = 0; record; record = (mbus_data_record *)record->next, i++) {
         free(unit); unit = NULL;
@@ -818,17 +833,17 @@ int process_mbus_data_variable(meter_t * meter, mbus_data_variable *data, int ve
         free(value); value = NULL;
         tariff = 0;
         if (record->drh.dib.dif == MBUS_DIB_DIF_MANUFACTURER_SPECIFIC) { // MBUS_DIB_DIF_VENDOR_SPECIFIC
-            LOGN(3,"%s: MBUS_DIB_DIF_VENDOR_SPECIFIC, record id %d ignored",meter->name,i);
+            LOGN(4,"%s: MBUS_DIB_DIF_VENDOR_SPECIFIC, record id %d ignored",meter->name,i);
         }
         else if (record->drh.dib.dif == MBUS_DIB_DIF_MORE_RECORDS_FOLLOW) {
-            LOGN(2,"%s: MBUS_DIB_DIF_MORE_RECORDS_FOLLOW not yet implemented",meter->name);
+            LOGN(3,"%s: MBUS_DIB_DIF_MORE_RECORDS_FOLLOW not yet implemented",meter->name);
         } else {
             func = strdup(mbus_data_record_function(record));
             unit = strdup(mbus_vib_unit_lookup(&(record->drh.vib)));
             tariff = mbus_data_record_tariff(record);
         }
         value = strdup(mbus_data_record_value(record));
-        if (verboseMsg) printf(" Record %d, value: %s, type: %s, unit: %s, function: %s, tariff: %d\n",i,value,mbus_data_record_type(record),unit,func,tariff);
+        if (verbose > 2) printf(" Record %d, value: %s, type: %s, unit: %s, function: %s, tariff: %d\n",i,value,mbus_data_record_type(record),unit,func,tariff);
         setRegisterValue(meter,i,value,0);
     }
     free(unit); free(func); free(value); free(medium); free(manufacturer);
@@ -836,30 +851,74 @@ int process_mbus_data_variable(meter_t * meter, mbus_data_variable *data, int ve
 }
 
 
+
+int mbusSelectSlave (mbus_handle *mb, int verbose, uint64_t * mbusAddress) {
+	char addrStr[255];
+
+	if (*mbusAddress > 255)
+    {
+		sprintf(addrStr,"%016lx",*mbusAddress);
+        // secondary addressing
+
+        int ret;
+
+        ret = mbus_select_secondary_address(mb, addrStr);
+
+        if (ret == MBUS_PROBE_COLLISION) {
+            if (verbose) EPRINTF("%s: Error: The address mask [%s] matches more than one device.\n", __PRETTY_FUNCTION__, addrStr);
+            return 0;
+        }
+        else if (ret == MBUS_PROBE_NOTHING) {
+            if (verbose) EPRINTF("%s: Error: The selected secondary address does not match any device [%s].\n", __PRETTY_FUNCTION__, addrStr);
+            return 0;
+        }
+        else if (ret == MBUS_PROBE_ERROR) {
+            if (verbose) EPRINTF("%s: Error: Failed to select secondary address [%s].\n", __PRETTY_FUNCTION__, addrStr);
+            return 0;
+        }
+
+        *mbusAddress = MBUS_ADDRESS_NETWORK_LAYER;
+    }
+    return 1;
+}
+
+
+
+#define RETRY_COUNT 3
+#define RETRY_DELAY 3000
+
 int queryMeter(int verboseMsg, meter_t *meter) {
 	meterRegisterRead_t *meterRegisterRead;
 	int res;
 	char format[50];
 	mbus_frame reply;
 	mbus_frame_data reply_data;
-
+	struct timespec timeStart, timeEnd;
+	int retryCount;
 
 	if (meter->disabled) return 0;
-	if (!meter->hostname)
-		if (meter->mbusAddress == -1 && meter->mbusId == -1) return 0;		// virtual meter with formulas only
+	if (meter->isFormulaOnly) {
+		meter->meterHasBeenRead = 1;
+		return 0;		// virtual meter with formulas only
+	}
+
+	meter->numQueries++;
 
 	if (verboseMsg) {
 		if (verboseMsg > 1) printf("\n");
-		if (meter->hostname) printf("Query \"%s\" @ TCP %s:%s, Mbus address %d\n",meter->name,meter->hostname,meter->port == NULL ? "502" : meter->port,meter->mbusAddress);
-		else printf("Query \"%s\" @ mbus serial address %d\n",meter->name,meter->mbusAddress);
+		if (meter->hostname) printf("Query \"%s\" @ TCP %s:%s, Mbus address %ld (0x%lx)\n",meter->name,meter->hostname,meter->port == NULL ? "502" : meter->port,meter->mbusAddress,meter->mbusAddress);
+		else printf("Query \"%s\" @ mbus serial address %ld\n",meter->name,meter->mbusAddress);
 	} else
 		VPRINTFN(2,"%s: queryMeter Mbus address %d",meter->name,meter->mbusAddress);
+
+	clock_gettime(CLOCK_REALTIME,&timeStart);
 
 	// tcp open retry
 	if (meter->isTCP) {
 		meter->mb = mbusTCP_open (meter->hostname,meter->port);	// get it from the pool or create/open if not already in list of connections
 		if(meter->mb == NULL) {
 			EPRINTFN("%s: connect to %s:%d failed, will retry later",meter->name,meter->hostname,meter->port);
+			meter->numErrs++;
 			return -555;
 		}
 	} else msleep(50);
@@ -881,23 +940,38 @@ int queryMeter(int verboseMsg, meter_t *meter) {
 	// TODO: ping needed ?
 	// TOTO: change to mbus_sendrecv_request to handle more than one reply frame
 
-	if (mbus_send_request_frame(*meter->mb, meter->mbusAddress) == -1) {
-		EPRINTFN("Failed to send M-Bus request frame for meter %s @ address %d",meter->name,meter->mbusAddress);
-		return -1;
-    	}
+	retryCount = RETRY_COUNT;
+	do {
+		res = mbus_send_request_frame(*meter->mb, meter->mbusAddress);
+		if (res == -1) {
+			EPRINTFN("Failed to send M-Bus request frame for meter %s @ address %d",meter->name,meter->mbusAddress);
+			meter->numErrs++;
+			return -1;
+		}
 
-	if (mbus_recv_frame(*meter->mb, &reply) != MBUS_RECV_RESULT_OK) {
-		EPRINTFN("Failed to receive M-Bus response frame for meter %s @ address %d",meter->name,meter->mbusAddress);
-		return -1;
+		res = mbus_recv_frame(*meter->mb, &reply);
+		if (res != MBUS_RECV_RESULT_OK) {
+			EPRINTFN("Failed to receive M-Bus response frame for meter %s @ address %d, retrying",meter->name,meter->mbusAddress);
+			meter->numErrs++;
+			//return -1;
+			msleep(RETRY_DELAY);
+		}
+		retryCount--;
+	} while ((res != MBUS_RECV_RESULT_OK) && (retryCount > 0));
+
+	if (res != MBUS_RECV_RESULT_OK) {
+		EPRINTFN("%s: unable to connect after %d retries",meter->name,RETRY_COUNT);
 	}
 
 	if (mbus_frame_data_parse(&reply, &reply_data) == -1) {
 		EPRINTFN("M-bus data parse error on meter %s @ %d: %s",meter->name,meter->mbusAddress,mbus_error_str());
+		meter->numErrs++;
 		return -1;
 	}
 
    	if (reply.type == MBUS_DATA_TYPE_ERROR) {
 		EPRINTFN("mbus_frame_data_parse returned MBUS_DATA_TYPE_ERROR, meter %s @ %d: %s",meter->name,meter->mbusAddress);
+		meter->numErrs++;
         return -1;
 	}
 
@@ -905,13 +979,22 @@ int queryMeter(int verboseMsg, meter_t *meter) {
 
 	if (reply_data.type == MBUS_DATA_TYPE_FIXED) {
 		res = process_mbus_data_fixed(meter, &(reply_data.data_fix),verboseMsg);
-		if (!res) return res;
+		if (res) {
+			meter->numErrs++;
+			EPRINTFN("%s: process_mbus_data_fixed failed %d",meter->name,res);
+			return res;
+		}
 	} else
 	if (reply_data.type == MBUS_DATA_TYPE_VARIABLE) {
 		res = process_mbus_data_variable(meter, &(reply_data.data_var),verboseMsg);
-		if (!res) return res;
+		if (res) {
+			meter->numErrs++;
+			EPRINTFN("%s: process_mbus_data_variable failed %d",meter->name,res);
+			return res;
+		}
 	} else {
 		EPRINTFN("unknown data type in returned data, meter %s @ %d: %s",meter->name,meter->mbusAddress);
+		meter->numErrs++;
         return -1;
 	}
 
@@ -923,7 +1006,7 @@ int queryMeter(int verboseMsg, meter_t *meter) {
 	executeMeterTypeFormulas(verboseMsg,meter);
 #endif
 
-	if (verboseMsg > 1) {
+	if (verbose > 1) {
 		meterRegisterRead = meter->registerRead;
 		while (meterRegisterRead) {
 			if (meterRegisterRead->isInt) {
@@ -943,6 +1026,9 @@ int queryMeter(int verboseMsg, meter_t *meter) {
 		}
 	}
 
+	clock_gettime(CLOCK_REALTIME,&timeEnd);
+	meter->queryTimeNano = ((timeEnd.tv_sec - timeStart.tv_sec) * NANO_PER_SEC) + (timeEnd.tv_nsec - timeStart.tv_nsec);
+
 	// mark complete
 	meter->meterHasBeenRead = 1;
 	return 0;
@@ -958,12 +1044,17 @@ int queryMeters(int verboseMsg) {
 	//  query
 	meter = meters;
 	while (meter) {
-		if (! meter->isTCP) msleep(100);
-		res = queryMeter(verboseMsg,meter);
-		if (res != 0) {
-			EPRINTFN("%s: query failed",meter->name);
+		if (meter->isFormulaOnly) {
+			//numMeters++;
+			meter->meterHasBeenRead++;
 		} else {
-			numMeters++;
+			res = queryMeter(verboseMsg,meter);
+			if (! meter->isTCP) msleep(250);
+			if (res != 0) {
+				EPRINTFN("%s: query failed",meter->name);
+			} else {
+				numMeters++;
+			}
 		}
 		meter = meter->next;
 	}
@@ -996,7 +1087,7 @@ int testSerialpresent() {
 
 
 	while (meter) {
-        if (!meter->isTCP && (meter->mbusAddress != -1 || meter->mbusId != -1)) { // serial and no virtual meter with formulas only
+        if (!meter->isTCP && (meter->mbusAddress != 0 || ! meter->isFormulaOnly)) { // serial and no virtual meter with formulas only
             // todo: by Id
             res = mbus_ping_address(*mb, &reply, meter->mbusAddress);
 			if (res == MBUS_RECV_RESULT_INVALID) {
@@ -1019,5 +1110,79 @@ int testSerialpresent() {
     }
     EPRINTFN("try: unable to try because of no serial mbus meters defined");
     return 0;
+}
+
+int mbus_showDeviceInfo(int verbose, mbus_handle *mb, uint64_t mbusAddress) {
+	mbus_frame reply;
+	mbus_frame_data reply_data;
+	mbus_data_record *record;
+
+
+
+	if (! mbusSelectSlave (mb, 1, &mbusAddress)) {
+		usleep(3000);
+		if (! mbusSelectSlave (mb, 1, &mbusAddress)) {
+			if (verbose) EPRINTFN("%s: mbusSelectSlave (%d,mb,0x%016x) failed", __PRETTY_FUNCTION__, verbose,mbusAddress);
+			return -1;
+		}
+	}
+
+
+	if (mbus_send_request_frame(mb, mbusAddress) == -1) {
+		if (verbose) EPRINTFN("Failed to send M-Bus request frame for address %d",mbusAddress);
+		return -1;
+    	}
+
+	if (mbus_recv_frame(mb, &reply) != MBUS_RECV_RESULT_OK) {
+		if (verbose) EPRINTFN("Failed to receive M-Bus response frame for address %d",mbusAddress);
+		return -1;
+	}
+
+	if (mbus_frame_data_parse(&reply, &reply_data) == -1) {
+		if (verbose) EPRINTFN("M-bus data parse error for address %d: %s",mbusAddress,mbus_error_str());
+		return -1;
+	}
+
+   	if (reply.type == MBUS_DATA_TYPE_ERROR) {
+		if (verbose) EPRINTFN("mbus_frame_data_parse returned MBUS_DATA_TYPE_ERROR, address %d",mbusAddress);
+        return -1;
+	}
+
+    // process
+
+	if (reply_data.type == MBUS_DATA_TYPE_FIXED) {
+		printf(" (%s",mbus_data_fixed_medium(&reply_data.data_fix));
+	} else
+	if (reply_data.type == MBUS_DATA_TYPE_VARIABLE) {
+		printf(" (%s,%s,%s",
+			mbus_data_variable_medium_lookup(reply_data.data_var.header.medium),
+			mbus_decode_manufacturer(reply_data.data_var.header.manufacturer[0], reply_data.data_var.header.manufacturer[1]),
+			mbus_data_product_name(&reply_data.data_var.header));
+
+		int i = 0;
+
+		record = reply_data.data_var.record;
+		while (record) {
+
+			if (record->drh.dib.dif == MBUS_DIB_DIF_MANUFACTURER_SPECIFIC) { // MBUS_DIB_DIF_VENDOR_SPECIFIC
+				if (verbose) LOGN(3,"%d MBUS_DIB_DIF_VENDOR_SPECIFIC, record id %d ignored",mbusAddress,i);
+			}
+			else if (record->drh.dib.dif == MBUS_DIB_DIF_MORE_RECORDS_FOLLOW) {
+				if (verbose) LOGN(2,"%d: MBUS_DIB_DIF_MORE_RECORDS_FOLLOW not yet implemented",mbusAddress);
+			} else {
+				//printf(" [%s] ",mbus_data_record_function(record));
+				if (strcmp("Fabrication number",mbus_vib_unit_lookup(&(record->drh.vib))) == 0) {
+					printf(",Serial: %s",mbus_data_record_value(record));
+				}
+			}
+			record = (mbus_data_record *)record->next;
+			i++;
+		}
+	}
+
+	printf(")");
+	if (reply_data.data_var.record)
+		mbus_data_record_free(reply_data.data_var.record); // free's up the whole list
+	return 0;
 }
 

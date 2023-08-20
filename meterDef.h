@@ -2,7 +2,7 @@
 #define METERDEF_H_INCLUDED
 
 #include <mbus.h>
-
+#include "parser.h"
 
 #define MUPARSER_ALLOWED_CHARS "0123456789_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ."
 
@@ -73,6 +73,9 @@
 #define TK_IMIN            620
 #define TK_IAVG            621
 #define TK_MODBUSDEBUG     622
+#define TK_DEFAULT         625
+#define TK_SCHEDULE        626
+#define TK_INAME           627
 
 #define CHAR_TOKENS ",;()={}+-*/&%$"
 
@@ -115,6 +118,7 @@ struct meterRegister_t {
 typedef struct meterType_t meterType_t;
 struct meterType_t {
 	char *name;
+	int isFormulaOnly;  // 1 when no modbus read will be performed
 	meterRegister_t *meterRegisters;
 	int numEnabledRegisters_mqtt;
 	int numEnabledRegisters_influx;
@@ -167,10 +171,14 @@ struct meter_t {
     int disabled;
 	meterRegisterRead_t *registerRead;
 	meterType_t *meterType;
-	int mbusAddress;
+	int isFormulaOnly;
+	uint64_t mbusAddress;
 	int mbusId;
 	char *name;
+	char *iname;
 	int meterHasBeenRead;
+	int hasSchedule;
+	int isDue;
 	mbus_handle **mb;	// pointer to a pointer to global RTU handle or a global one for a TCP connection (multiple meters may use the same IP connection)
 	int isTCP;
 	char *hostname;
@@ -186,6 +194,9 @@ struct meter_t {
 	meter_t *next;
 	int influxWriteMult;
 	int influxWriteCountdown;
+	unsigned int queryTimeNano;
+	unsigned int numQueries;	// including errs
+	unsigned int numErrs;
 };
 
 
@@ -202,6 +213,6 @@ void freeMeters();
 
 meter_t *findMeter(char *name);
 
-
+int parserExpectEqual(parser_t * pa, int tkExpected);
 
 #endif // METERDEF_H_INCLUDED
