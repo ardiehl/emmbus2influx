@@ -9,6 +9,7 @@ extern "C" {
 #include "MQTTClient.h"
 #include "MQTTClientPersistence.h"
 
+#define MQTT_RECONNECTED -9989864
 
 
 typedef struct {
@@ -28,6 +29,8 @@ typedef struct {
 
 
 mqtt_pubT * mqtt_pub_init (const char * hostname, int port, const char *  clientId, const char *topicPrefix);
+
+void mqtt_pub_yield (mqtt_pubT *m);
 
 int mqtt_pub_free(mqtt_pubT *m);
 

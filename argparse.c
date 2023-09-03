@@ -272,6 +272,7 @@ int argParse_handleValue (argParse_handleT *a, char *arg, const struct argParse_
 			}
 			p++;
 		}
+		errno=0;
 		ival = strtol (arg,NULL,10);
 		//printf ("ival(%s): %d, %d\n",arg,ival,errno);
 		if (errno) {

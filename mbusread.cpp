@@ -768,9 +768,13 @@ void setRegisterValue(meter_t * meter,int recordNumber,const char * value, float
             rr = meter->registerRead;
             while (rr) {
                 if (rr->registerDef->recordNumber == recordNumber) {
-                    if (value) rr->fvalue = strtod(value,&endptr); else rr->fvalue = fvalue;
-                    if (*endptr != 0) EPRINTFN("%s.%s: unable to convert value '%s' to a number",meter->name,rr->registerDef->name,value);
+                    if (value) {
+						rr->fvalue = strtod(value,&endptr);
+						if (*endptr != 0) EPRINTFN("%s.%s: unable to convert value '%s' to a number",meter->name,rr->registerDef->name,value);
+					}  else rr->fvalue = fvalue;
+					//VPRINTF(9,"%s %d '%s' %6.3f %6.3f ",meter->name,recordNumber,value,fvalue,rr->fvalue);
                     applyDevider (rr);
+                    //VPRINTF(9,"%6.3f\n",rr->fvalue);
                     return;
                 }
                 rr = rr->next;
@@ -884,8 +888,8 @@ int mbusSelectSlave (mbus_handle *mb, int verbose, uint64_t * mbusAddress) {
 
 
 
-#define RETRY_COUNT 3
-#define RETRY_DELAY 3000
+#define RETRY_COUNT 4
+#define RETRY_DELAY 5000
 
 int queryMeter(int verboseMsg, meter_t *meter) {
 	meterRegisterRead_t *meterRegisterRead;
@@ -921,7 +925,7 @@ int queryMeter(int verboseMsg, meter_t *meter) {
 			meter->numErrs++;
 			return -555;
 		}
-	} else msleep(50);
+	} else msleep(250);
 
 
 	// reset read flags
@@ -951,6 +955,7 @@ int queryMeter(int verboseMsg, meter_t *meter) {
 
 		res = mbus_recv_frame(*meter->mb, &reply);
 		if (res != MBUS_RECV_RESULT_OK) {
+			// dont show the first retry
 			EPRINTFN("Failed to receive M-Bus response frame for meter %s @ address %d, retrying",meter->name,meter->mbusAddress);
 			meter->numErrs++;
 			//return -1;
@@ -1049,7 +1054,7 @@ int queryMeters(int verboseMsg) {
 			meter->meterHasBeenRead++;
 		} else {
 			res = queryMeter(verboseMsg,meter);
-			if (! meter->isTCP) msleep(250);
+			if (! meter->isTCP) msleep(500);
 			if (res != 0) {
 				EPRINTFN("%s: query failed",meter->name);
 			} else {

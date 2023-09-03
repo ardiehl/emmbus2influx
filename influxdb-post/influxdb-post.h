@@ -18,6 +18,15 @@ extern "C" {
 #include <unistd.h>
 #include <netdb.h>
 
+#ifndef ESP32
+#define INFLUXDB_POST_LIBCURL
+#ifdef CURL_STATIC
+#include "curl/curl.h"
+#else
+#include <curl/curl.h>
+#endif
+#endif
+
 #define INFLUX_TIMEOUT_SECONDS 5
 
 /*
@@ -47,13 +56,13 @@ extern "C" {
 #define INFLUX_TSNOW          IF_TYPE_TIMESTAMP_NOW
 #define INFLUX_END            IF_TYPE_ARG_END
 
+#define INFLUX_INITIAL_BUF_SIZE 0x100
+
 struct influx_dataRow_t
 {
     char* postData;
     struct influx_dataRow_t* next;
 };
-
-
 
 
 typedef struct _influx_client_t
@@ -69,11 +78,32 @@ typedef struct _influx_client_t
     int maxNumEntriesToQueue;  // for buffer in case of send failures
     int numEntriesQueued;
     struct influx_dataRow_t* firstEntry;
-    int hostResolved;
+
+    int lastNeededBufferSize;
+    size_t influxBufUsed;
+	size_t influxBufLen;
+	char * influxBuf;
+	int last_type;
+
+#ifdef INFLUXDB_POST_LIBCURL
+	int isGrafana;
+	char *grafanaPushID;
+	CURL *ch;
+	struct curl_slist *ch_headers;
+	char *url;
+	int isWebsocket;
+#else
+	int hostResolved;
     struct addrinfo *ainfo;
+#endif
 } influx_client_t;
 
 influx_client_t* influxdb_post_init (char* host, int port, char* db, char* user, char* pwd, char * org, char *bucket, char *token, int numQueueEntries);
+#ifdef INFLUXDB_POST_LIBCURL
+influx_client_t* influxdb_post_init_grafana (char* host, int port, char * grafanaPushID, char *token);
+#endif // INFLUXDB_POST_LIBCURL
+
+void influxdb_post_freeBuffer(influx_client_t *c);
 int influxdb_deQueue(influx_client_t *c);
 void influxdb_post_deInit(influx_client_t *c);
 void influxdb_post_free(influx_client_t *c);
@@ -101,10 +131,19 @@ int influxdb_send_udp(influx_client_t* c, ...);
 //int post_http_send_line(influx_client_t *c, char *buf, int len);
 //int send_udp_line(influx_client_t* c, char *line, int len);
 
-int influxdb_format_line(char **buf, int *len , size_t used, ...);
 
-// line will be free'd or added to queue if influxdb server is unavailable
-int influxdb_post_http_line(influx_client_t* c, char * lineIn);
+int influxdb_format_line(influx_client_t* c, ...); //char **buf, int *len , size_t used, ...);
+
+#ifdef INFLUXDB_POST_LIBCURL
+typedef enum {proto_http,proto_https,proto_ws,proto_wss,proto_none,proto_unknown} transport_proto_t;
+
+transport_proto_t getTransportProto (const char *url);
+transport_proto_t changeTransportProto (char **url, transport_proto_t t);
+const char *getTransportProtoStr(transport_proto_t t);
+#endif // INFLUXDB_POST_LIBCURL
+
+// buffer will be free'd or added to queue if influxdb server is unavailable
+int influxdb_post_http_line(influx_client_t* c);
 
 #ifdef __cplusplus
 }

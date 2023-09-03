@@ -179,6 +179,7 @@ int parseMeterType (parser_t * pa) {
 	char errMsg[100];
 	int enableInfluxWrite = 1;
 	int enableMqttWrite = 1;
+	int enableGrafanaWrite = 1;
 
 	meterType = (meterType_t *)calloc(1,sizeof(meterType_t));
 	meterType->mqttprefix = strdup(mqttprefix);
@@ -222,6 +223,10 @@ int parseMeterType (parser_t * pa) {
 				parserExpectEqual(pa,TK_INTVAL);
 				enableInfluxWrite = pa->iVal;
 				break;
+			case TK_GRAFANA:
+				parserExpectEqual(pa,TK_INTVAL);
+				enableGrafanaWrite = pa->iVal;
+				break;
 			case TK_EOL:
 				break;
 			case TK_NAME:
@@ -242,6 +247,7 @@ int parseMeterType (parser_t * pa) {
 				meterRegister = (meterRegister_t *)calloc(1,sizeof(meterRegister_t));
 				meterRegister->enableInfluxWrite = enableInfluxWrite;
                 meterRegister->enableMqttWrite = enableMqttWrite;
+                meterRegister->enableGrafanaWrite = enableGrafanaWrite;
 				meterRegister->type = TK_INT16;
 				meterRegister->name = strdup(pa->strVal);
 				checkAllowedChars (pa,meterRegister->name);
@@ -313,6 +319,9 @@ int parseMeterType (parser_t * pa) {
                             case TK_INFLUX:
                                 meterRegister->enableInfluxWrite = pa->iVal;
                                 break;
+							case TK_GRAFANA:
+                                meterRegister->enableGrafanaWrite = pa->iVal;
+                                break;
 							default:
 								parserError(pa,"parseMeterType: opt with int %d (%s) not yet supported",tk,pa->strVal);
 						}
@@ -353,9 +362,6 @@ int parseMeterType (parser_t * pa) {
 					mr->next = meterRegister;
 				} else meterType->meterRegisters = meterRegister;
 
-				// update enabled register count
-				if (meterRegister->enableInfluxWrite) meterType->numEnabledRegisters_influx++;
-				if (meterRegister->enableMqttWrite) meterType->numEnabledRegisters_mqtt++;
 				break;
 
 			default:
@@ -373,13 +379,17 @@ int parseMeterType (parser_t * pa) {
 	if (!meterType->meterRegisters) parserError(pa,"\"%s\": meter type definition without registers",meterType->name);
 
 	meterType->isFormulaOnly = 1;
-        meterType->numEnabledRegisters_influx = 0;
-        meterRegister = meterType->meterRegisters;
-        while (meterRegister) {
-                        if (! meterRegister->isFormulaOnly) meterType->isFormulaOnly = 0;
-                        meterType->numEnabledRegisters_influx += meterRegister->enableInfluxWrite;
-                        meterRegister = meterRegister->next;
-        }
+	meterType->numEnabledRegisters_influx = 0;
+	meterType->numEnabledRegisters_mqtt = 0;
+	meterType->numEnabledRegisters_grafana = 0;
+	meterRegister = meterType->meterRegisters;
+	while (meterRegister) {
+			if (! meterRegister->isFormulaOnly) meterType->isFormulaOnly = 0;
+			meterType->numEnabledRegisters_influx += meterRegister->enableInfluxWrite;
+			meterType->numEnabledRegisters_mqtt += meterRegister->enableMqttWrite;
+			meterType->numEnabledRegisters_grafana += meterRegister->enableGrafanaWrite;
+			meterRegister = meterRegister->next;
+	}
 
 	// store meter type
 	if (meterTypes) {
@@ -399,6 +409,9 @@ int parseMeter (parser_t * pa) {
 	meterFormula_t * meterFormula;  // calculated meter specific registers
 	int typeDefined = 0;
 	int typeConflict = 0;
+	int enableInfluxWrite = 1;	// defaults for formula registers
+    int enableMqttWrite = 1;
+    int enableGrafanaWrite = 1;
 
 	meter = (meter_t *)calloc(1,sizeof(meter_t));
 	parserExpect(pa,TK_EOL);  // after section
@@ -410,6 +423,18 @@ int parseMeter (parser_t * pa) {
 	//printf("tk2: %d, %s\n",tk,parserGetTokenTxt(pa,tk));
 	while (tk != TK_SECTION && tk != TK_EOF) {
 		switch(tk) {
+			case TK_INFLUX:
+				parserExpectEqual(pa,TK_INTVAL);
+				enableInfluxWrite = pa->iVal;
+				break;
+			case TK_MQTT:
+				parserExpectEqual(pa,TK_INTVAL);
+				enableMqttWrite = pa->iVal;
+				break;
+			case TK_GRAFANA:
+				parserExpectEqual(pa,TK_INTVAL);
+				enableGrafanaWrite = pa->iVal;
+				break;
 			case TK_SCHEDULE:
 				parserExpectEqual(pa,TK_STRVAL);
 				cron_meter_add_byName(pa->strVal,meter);
@@ -472,8 +497,9 @@ int parseMeter (parser_t * pa) {
 				parserExpectEqual(pa,TK_STRVAL);
 				meter->meterType = findMeterType(pa->strVal);
 				if (!meter->meterType) parserError(pa,"undefined meter type ('%s')",pa->strVal);
-				meter->numEnabledRegisters_mqtt = meter->meterType->numEnabledRegisters_mqtt;
+				meter->numEnabledRegisters_mqtt += meter->meterType->numEnabledRegisters_mqtt;
 				meter->numEnabledRegisters_influx += meter->meterType->numEnabledRegisters_influx;
+				meter->numEnabledRegisters_grafana += meter->meterType->numEnabledRegisters_grafana;
 				if (meter->meterType->mqttprefix) {
 					free(meter->mqttprefix);
 					meter->mqttprefix = strdup(meter->meterType->mqttprefix);
@@ -502,6 +528,12 @@ int parseMeter (parser_t * pa) {
 				meter->iname = strdup(pa->strVal);
 				checkAllowedChars (pa,meter->iname);
 				break;
+			case TK_GNAME:
+				parserExpectEqual(pa,TK_STRVAL);
+				if (meter->gname) free(meter->gname);
+				meter->gname = strdup(pa->strVal);
+				if (strlen(pa->strVal) < 1) parserError(pa,"%s: name can not be empty",meter->name);
+				break;
 			case TK_HOSTNAME:
 				if (meter->hostname) parserError(pa,"duplicate hostname");
 				parserExpectEqual(pa,TK_STRVAL);
@@ -525,8 +557,9 @@ int parseMeter (parser_t * pa) {
 					meterFormula = meterFormula->next;
 				}
 				meterFormula = (meterFormula_t *)calloc(1,sizeof(meterFormula_t));
-				meterFormula->enableInfluxWrite = 1;
-                meterFormula->enableMqttWrite = 1;
+				meterFormula->enableInfluxWrite = enableInfluxWrite;
+                meterFormula->enableMqttWrite = enableMqttWrite;
+                meterFormula->enableGrafanaWrite = enableGrafanaWrite;
 
 				meterFormula->name = strdup(pa->strVal);
 				checkAllowedChars (pa,meterFormula->name);
@@ -569,6 +602,9 @@ int parseMeter (parser_t * pa) {
                             case TK_INFLUX:
                                 meterFormula->enableInfluxWrite = pa->iVal;
                                 break;
+							case TK_GRAFANA:
+                                meterFormula->enableGrafanaWrite = pa->iVal;
+                                break;
 							default:
 								parserError(pa,"parseMeter: opt with int %d (%s) not yet supported",tk,pa->strVal);
 						}
@@ -609,6 +645,7 @@ int parseMeter (parser_t * pa) {
 				// update enabled register count in meter
 				if (meterFormula->enableInfluxWrite) meter->numEnabledRegisters_influx++;
 				if (meterFormula->enableMqttWrite) meter->numEnabledRegisters_mqtt++;
+				if (meterFormula->enableGrafanaWrite) meter->numEnabledRegisters_grafana++;
 
 				break;
 
@@ -669,12 +706,6 @@ int parseMeter (parser_t * pa) {
 		meter->isFormulaOnly = meter->meterType->isFormulaOnly;
 	else
 		meter->isFormulaOnly = 1;
-
-	meterFormula = meter->meterFormula;
-	while (meterFormula) {
-		if (meterFormula->enableInfluxWrite) meter->numEnabledRegisters_influx++;
-		meterFormula = meterFormula->next;
-	}
 
 	return tk;
 }
@@ -738,6 +769,8 @@ int readMeterDefinitions (const char * configFileName) {
 		"default"         ,TK_DEFAULT,
 		"schedule"        ,TK_SCHEDULE,
 		"iname"           ,TK_INAME,
+		"grafana"         ,TK_GRAFANA,
+		"gname"           ,TK_GNAME,
 		NULL);
 	rc = parserBegin (pa, configFileName, 1);
 	if (rc != 0) {

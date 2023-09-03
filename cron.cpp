@@ -228,7 +228,7 @@ int cron_queryMeters(int verboseMsg) {
 	while (meter) {
 		if (meter->isDue) {
 			int res = queryMeter(verboseMsg, meter);
-			if (! meter->isTCP) msleep(250);
+			if (! meter->isTCP) msleep(500);
 			if (res == 0) numMeters++;
 		}
 		meter = meter->next;

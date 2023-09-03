@@ -4,6 +4,9 @@
  *   fixed connect to ipv6 target
  * AD 4 Oct 2022:
  *   try to connect to all addresses on fails
+ * AD 30.08.2023:
+ *   libcurl if not ESP32
+ *   Grafana using websockets
  *
  */
 #include <stdlib.h>
@@ -21,12 +24,16 @@
 #include <time.h>
 #include "../log.h"
 #include <inttypes.h>
+#include <assert.h>
+#include <time.h>
 
 #define INFLUX_TIMEOUT_SECONDS 5
-#define INFLUX_DEQUEUE_AT_ONCE 10
+#define INFLUX_DEQUEUE_AT_ONCE 50
 
 #include "influxdb-post.h"
 
+// TODO: make this a paremeter
+#define WEBSOCKETS_PING_SECS 30
 
 /*
   Usage:
@@ -45,43 +52,72 @@
               The sort should match the results from the [Go bytes.Compare function](https://golang.org/pkg/bytes/#Compare).
  */
 
-int _format_line(char** buf, va_list ap);
+int _format_line(influx_client_t* c, va_list ap);
 int send_udp_line(influx_client_t* c, char *line, int len);
-int _format_line2(char** buf, va_list ap, size_t *_len, size_t used);
-int _escaped_append(char** dest, size_t* len, size_t* used, const char* src, const char* escape_seq);
+int _format_line2(influx_client_t* c, va_list ap);
+int _escaped_append(influx_client_t* c, const char* src, const char* escape_seq);
 
 influx_client_t* influxdb_post_init (char* host, int port, char* db, char* user, char* pwd, char * org, char *bucket, char *token, int numQueueEntries) {
     influx_client_t* i;
 
-    i=malloc(sizeof(influx_client_t));
+    i=calloc(1,sizeof(influx_client_t));
     if(! i) return i;
 
     memset((void*)i, 0, sizeof(influx_client_t));
-    i->host=host;
+    if(host) i->host=strdup(host);
     if(port==0) i->port=8086; else i->port=port;
-    i->db=db;
-    i->usr=user;
-    i->pwd=pwd;
-    i->org=org;
-    i->bucket=bucket;
-    i->token=token;
+    if (db) i->db=strdup(db);
+    if (user) i->usr=strdup(user);
+    if(pwd) i->pwd=strdup(pwd);
+    if (org) i->org=strdup(org);
+    if (bucket) i->bucket=strdup(bucket);
+    if (token) i->token=strdup(token);
     i->maxNumEntriesToQueue=numQueueEntries;
+    i->lastNeededBufferSize = INFLUX_INITIAL_BUF_SIZE;
+
     return i;
+}
+
+#ifdef INFLUXDB_POST_LIBCURL
+influx_client_t* influxdb_post_init_grafana (char* host, int port, char * grafanaPushID, char *token) {
+	if (port == 0) port = 3000;
+	if (grafanaPushID == NULL) return NULL;
+	if (*grafanaPushID == 0) return NULL;
+	influx_client_t* i = influxdb_post_init(host,port,NULL,NULL,NULL,NULL,NULL,token,0);
+	if (i) {
+		i->isGrafana++;
+		i->grafanaPushID = strdup(grafanaPushID);
+	}
+	return i;
+}
+#endif // INFLUXDB_POST_LIBCURL
+
+void influxdb_post_freeBuffer(influx_client_t *c) {
+	if (c->influxBuf) {
+		free(c->influxBuf);
+		c->influxBuf = NULL;
+	}
+	if (c->influxBufLen > c->lastNeededBufferSize) c->lastNeededBufferSize = c->influxBufLen;
+	c->influxBufLen = 0;
+	c->influxBufUsed = 0;
 }
 
 void influxdb_post_deInit(influx_client_t *c) {
      while (influxdb_deQueue(c) > 0) {};
+#ifndef INFLUXDB_POST_LIBCURL
      if(c->ainfo) {
         freeaddrinfo(c->ainfo);
         c->ainfo=NULL;
      }
      c->hostResolved=0;
+#endif
 }
 
 
 void influxdb_post_free(influx_client_t *c) {
 	if (c) {
 		influxdb_post_deInit(c);
+		influxdb_post_freeBuffer(c);
 		free(c->host);
 		free(c->db);
 		free(c->usr);
@@ -89,13 +125,17 @@ void influxdb_post_free(influx_client_t *c) {
 		free(c->org);
 		free(c->bucket);
 		free(c->token);
+#ifdef INFLUXDB_POST_LIBCURL
+		free(c->url);
+		if (c->ch_headers) curl_slist_free_all(c->ch_headers);
+		if (c->ch) curl_easy_cleanup(c->ch);
+#endif
 		free(c);
 	}
 }
 
-
-int influxdb_send_udp(influx_client_t* c, ...)
-{
+#if 0
+int influxdb_send_udp(influx_client_t* c, ...) {
     int ret = 0, len;
     va_list ap;
     char* line = NULL;
@@ -111,48 +151,52 @@ int influxdb_send_udp(influx_client_t* c, ...)
     free(line);
     return ret;
 }
+#endif // 0
 
-int influxdb_format_line(char **buf, int *len, size_t used, ...)
-{
+int influxdb_format_line(influx_client_t* c, ...) {
     va_list ap;
-    va_start(ap, used);
+    va_start(ap, c);
 
-    used = _format_line2(buf, ap, (size_t *)len, used);
+    int used = _format_line2(c, ap);
     va_end(ap);
-    if(*len < 0)
+    if(c->influxBufLen < 0)
         return -1;
     else
 	return used;
 }
 
-int lastNeededBufferSize = 0x100;
 
-int _begin_line(char **buf)
-{
-    int len = lastNeededBufferSize; //1500;  // ad: increased because format_line2 is buggy when extending the buffer
-    if(!(*buf = (char*)malloc(len)))
-        return -1;
+
+int _begin_line(influx_client_t* c) {
+	if (c->influxBuf) {
+		free(c->influxBuf);
+		c->influxBuf = NULL;
+		c->influxBufLen = 0;
+		c->influxBufUsed = 0;
+	}
+    int len = c->lastNeededBufferSize;
+	c->influxBuf = malloc(len);
+    if(!(c->influxBuf)) return -1;
+	c->influxBufLen = len;
+	c->influxBufUsed = 0;
+	*c->influxBuf = 0;
     return len;
 }
 
-int _format_line(char** buf, va_list ap)
-{
-	size_t len = 0;
-	*buf = NULL;
-	return _format_line2(buf, ap, &len, 0);
+int _format_line(influx_client_t* c, va_list ap) {
+	return _format_line2(c, ap);
 }
 
 
-int appendToBuf (char **buf, size_t *used, size_t *bufLen, char *src) {
+int appendToBuf2 (char **buf, size_t *used, size_t *bufLen, char *src) {
     int srcLen = strlen(src);
     if (*used+srcLen+1 > *bufLen) {
         *bufLen = (*bufLen * 2) + srcLen;
         *buf = (char*)realloc(*buf, *bufLen);
         if (*buf == NULL) {
-            LOG(0,"failed to expand buffer to %zu (used: %zu, slen: %d)\n",*bufLen,*used,srcLen);
+            LOGN(0,"failed to expand buffer to %zu (used: %zu, slen: %d)\n",*bufLen,*used,srcLen);
             return -1;
         }
-        if (*bufLen > lastNeededBufferSize) lastNeededBufferSize = *bufLen;
         //printf("appendToBuf, after realloc\n>'%s'<\n",*buf);
     }
 
@@ -162,11 +206,15 @@ int appendToBuf (char **buf, size_t *used, size_t *bufLen, char *src) {
     return srcLen;
 }
 
+int appendToBuf (influx_client_t* c, char * src) {
+	return appendToBuf2 (&c->influxBuf, &c->influxBufUsed, &c->influxBufLen, src);
+}
+
 #define MAX_FIELD_LENGTH 255
 
-int last_type;
 
-int _format_line2(char** buf, va_list ap, size_t *_len, size_t used)
+
+int _format_line2(influx_client_t* c, va_list ap)
 {
 #if 0
 #define _APPEND(fmter...) \
@@ -182,25 +230,21 @@ int _format_line2(char** buf, va_list ap, size_t *_len, size_t used)
     }
 #endif // 0
 
-#define _APPEND(fmter...) \
-        do { \
-        if (snprintf(&tempStr[0],MAX_FIELD_LENGTH, ##fmter) >= MAX_FIELD_LENGTH) \
-            goto FAIL; \
-        if (appendToBuf (buf, &used, &len, &tempStr[0]) < 0) \
-            goto FAIL; \
-        } while(0)
+#define _APPEND(fmter...) {\
+        if (snprintf(&tempStr[0],MAX_FIELD_LENGTH, ##fmter) >= MAX_FIELD_LENGTH) goto FAIL; \
+        if (appendToBuf (c, &tempStr[0]) < 0) goto FAIL; \
+		}
 
-
-    size_t len = *_len;
+//    size_t len = *_len;
     int type = 0;
     uint64_t i = 0;
     double d = 0.0;
     char tempStr[MAX_FIELD_LENGTH+1];
 
-    if (*buf == NULL) {
-	    len = _begin_line(buf);
-	    used = 0;
-	    last_type = 0;
+    if (c->influxBuf == NULL) {
+	    _begin_line(c);
+	    //used = 0;
+	    c->last_type = 0;
 //	} else {
 //		last_type = IF_TYPE_FIELD_BOOLEAN; // ad 2.12.2021
 	}
@@ -208,29 +252,27 @@ int _format_line2(char** buf, va_list ap, size_t *_len, size_t used)
     type = va_arg(ap, int);
     while(type != IF_TYPE_ARG_END) {
         if(type >= IF_TYPE_TAG && type <= IF_TYPE_FIELD_BOOLEAN) {
-            if(last_type < IF_TYPE_MEAS || last_type > (type == IF_TYPE_TAG ? IF_TYPE_TAG : IF_TYPE_FIELD_BOOLEAN))
+            if(c->last_type < IF_TYPE_MEAS || c->last_type > (type == IF_TYPE_TAG ? IF_TYPE_TAG : IF_TYPE_FIELD_BOOLEAN))
                 goto FAIL;
-            _APPEND("%c", (last_type <= IF_TYPE_TAG && type > IF_TYPE_TAG) ? ' ' : ',');
-            if(_escaped_append(buf, &len, &used, va_arg(ap, char*), ",= "))
-                return -2;
+            _APPEND("%c", (c->last_type <= IF_TYPE_TAG && type > IF_TYPE_TAG) ? ' ' : ',');
+            if(_escaped_append(c, va_arg(ap, char*), ",= ")) return -2;
             _APPEND("=");
         }
         switch(type) {
             case IF_TYPE_MEAS:
-                if(last_type)
-					_APPEND("\n");
-                if(last_type && last_type <= IF_TYPE_TAG)
+                if(c->last_type) _APPEND("\n");
+                if(c->last_type && c->last_type <= IF_TYPE_TAG)
                     goto FAIL;
-                if(_escaped_append(buf, &len, &used, va_arg(ap, char*), ", "))
+                if(_escaped_append(c, va_arg(ap, char*), ", "))
                     return -3;
                 break;
             case IF_TYPE_TAG:
-                if(_escaped_append(buf, &len, &used, va_arg(ap, char*), ",= "))
+                if(_escaped_append(c, va_arg(ap, char*), ",= "))
                     return -4;
                 break;
             case IF_TYPE_FIELD_STRING:
                 _APPEND("\"");
-                if(_escaped_append(buf, &len, &used, va_arg(ap, char*), "\""))
+                if(_escaped_append(c, va_arg(ap, char*), "\""))
                     return -5;
                 _APPEND("\"");
                 break;
@@ -248,55 +290,53 @@ int _format_line2(char** buf, va_list ap, size_t *_len, size_t used)
                 _APPEND("%c", i ? 't' : 'f');
                 break;
             case IF_TYPE_TIMESTAMP:
-                if(last_type < IF_TYPE_FIELD_STRING || last_type > IF_TYPE_FIELD_BOOLEAN)
+                if(c->last_type < IF_TYPE_FIELD_STRING || c->last_type > IF_TYPE_FIELD_BOOLEAN)
                     goto FAIL;
                 i = va_arg(ap, long long);
                 _APPEND(" %" PRId64, i);
                 break;
             case IF_TYPE_TIMESTAMP_NOW:
-                if(last_type < IF_TYPE_FIELD_STRING || last_type > IF_TYPE_FIELD_BOOLEAN)
+                if(c->last_type < IF_TYPE_FIELD_STRING || c->last_type > IF_TYPE_FIELD_BOOLEAN)
                     goto FAIL;
                 i = influxdb_getTimestamp();
-                //LOGN(0,"xxxxx %" PRId64,i);
                 _APPEND(" %" PRId64, i);
                 break;
             default:
                 goto FAIL;
         }
-        last_type = type;
+        c->last_type = type;
         type = va_arg(ap, int);
     }
     //_APPEND("\n");  // AD: removed
 #if 0
-    if(last_type <= IF_TYPE_TAG)
+    if(c->last_type <= IF_TYPE_TAG)
         goto FAIL;
 #endif
-    *_len = len;
-    return used;
+    //*_len = len;
+    return 0;
 FAIL:
-	free(*buf);
-	*buf = NULL;
+	influxdb_post_freeBuffer(c);
     return -1;
 }
 #undef _APPEND
 
-int _escaped_append(char** dest, size_t* len, size_t* used, const char* src, const char* escape_seq)
+int _escaped_append(influx_client_t * c, const char* src, const char* escape_seq)
 {
     size_t i = 0;
 
     for(;;) {
         if((i = strcspn(src, escape_seq)) > 0) {
-            if(*used + i > *len && !(*dest = (char*)realloc(*dest, (*len) *= 2)))
+            if(c->influxBufUsed + i > c->influxBufLen && !(c->influxBuf = (char*)realloc(c->influxBuf, (c->influxBufLen) *= 2)))
                 return -1;
-            strncpy(*dest + *used, src, i);
-            *used += i;
+            strncpy(c->influxBuf + c->influxBufUsed, src, i);
+            c->influxBufUsed += i;
             src += i;
         }
         if(*src) {
-            if(*used + 2 > *len && !(*dest = (char*)realloc(*dest, (*len) *= 2)))
+            if(c->influxBufUsed + 2 > c->influxBufLen && !(c->influxBuf = (char*)realloc(c->influxBuf, (c->influxBufLen) *= 2)))
                 return -2;
-            (*dest)[(*used)++] = '\\';
-            (*dest)[(*used)++] = *src++;
+            (c->influxBuf)[(c->influxBufUsed)++] = '\\';
+            (c->influxBuf)[(c->influxBufUsed)++] = *src++;
         }
         else
             return 0;
@@ -304,7 +344,7 @@ int _escaped_append(char** dest, size_t* len, size_t* used, const char* src, con
     return 0;
 }
 
-
+#ifndef INFLUXDB_POST_LIBCURL
 int resolvHostname (influx_client_t *c) {
     int res;
     char service[30];
@@ -323,8 +363,10 @@ int resolvHostname (influx_client_t *c) {
     c->hostResolved=1;
     return 0;
 }
+#endif // INFLUXDB_POST_LIBCURL
 
 
+#ifndef INFLUXDB_POST_LIBCURL
 int post_http_send_line(influx_client_t *c, char *buf, int len)
 {
     int sock=0, ret_code = 0;
@@ -332,6 +374,8 @@ int post_http_send_line(influx_client_t *c, char *buf, int len)
     int charsReceived = 0;
     struct addrinfo *ai;
     int bytesExpected, bytesWritten;
+
+    if (len <= 0) return 0;
 
     if(! c->hostResolved) {
         if (resolvHostname (c) != 0)
@@ -369,11 +413,11 @@ int post_http_send_line(influx_client_t *c, char *buf, int len)
 		sprintf((char *)iv[0].iov_base, httpHeaderFormat,
             c->db, c->usr ? "&u=" : "",c->usr ? c->usr : "", c->pwd ? "&p=" : "", c->pwd ? c->pwd : "", c->host, iv[1].iov_len);
 	}
-    LOG(2,"httpHeader initialized:\n---------------%s\n---------------\n",(char *)iv[0].iov_base);
+    LOGN(2,"httpHeader initialized:\n---------------\n%s\n---------------\n",(char *)iv[0].iov_base);
 
     iv[0].iov_len = strlen((char *)iv[0].iov_base);
 
-	LOG(5, "influxdb-c::post_http: iv[1] = '%s'\n", (char *)iv[1].iov_base);
+	LOGN(5, "influxdb-c::post_http: iv[1] = '%s'\n", (char *)iv[1].iov_base);
 
 
 	ai = c->ainfo;
@@ -398,7 +442,7 @@ int post_http_send_line(influx_client_t *c, char *buf, int len)
 		c->hostResolved=0;      // make sure we resolv the host name the next time, ip may have been changed
 		//free(iv[1].iov_base); iv[1].iov_base = NULL;
 		//free(iv[0].iov_base); iv[0].iov_base = NULL;
-		LOG(1,"connect to %s:%d failed (%d - %s)\n",c->host,c->port,errno,strerror(errno));
+		LOGN(1,"connect to %s:%d failed (%d - %s)\n",c->host,c->port,errno,strerror(errno));
 		goto END;
 	}
 
@@ -428,15 +472,15 @@ int post_http_send_line(influx_client_t *c, char *buf, int len)
     memset(&recvBuf,0,RECV_BUF_LEN);
     int recLen = recv(sock,&recvBuf,RECV_BUF_LEN,0);
     //LOGN(0,"recLen:%d",recLen);
-    if (recLen <= 0) { LOG(0,"post_http_send_line: recv returned %d, errno=%d\n",recLen,errno); ret_code = -8; goto END; }
+    if (recLen <= 0) { LOGN(0,"post_http_send_line: recv returned %d, errno=%d\n",recLen,errno); ret_code = -8; goto END; }
 
     /*  RFC 2616 defines the Status-Line syntax as shown below:
 
         Status-Line = HTTP-Version SP Status-Code SP Reason-Phrase CRLF */
     char *p = &recvBuf[0];
-    if (strncmp(recvBuf,"HTTP/",5) != 0) { LOG(0,"post_http_send_line: response not starting with HTTP/ (%s)\n",recvBuf); ret_code = -20; goto END; }
+    if (strncmp(recvBuf,"HTTP/",5) != 0) { LOGN(0,"post_http_send_line: response not starting with HTTP/ (%s)\n",recvBuf); ret_code = -20; goto END; }
 
-    while ((*p != '\0') && (*p != '\n') && (*p != ' ')) { p++; if (*p =='\0') { LOG(0,"post_http_send_line: end of string while searching for start of resonse code in '%s'\n",recvBuf); ret_code = -8; goto END; } }
+    while ((*p != '\0') && (*p != '\n') && (*p != ' ')) { p++; if (*p =='\0') { LOGN(0,"post_http_send_line: end of string while searching for start of resonse code in '%s'\n",recvBuf); ret_code = -8; goto END; } }
 
     if (*p != ' ') { ret_code = -9; goto END; }
     p++; ret_code = 0;
@@ -466,8 +510,244 @@ END:
     return ret_code / 100 == 2 ? 0 : ret_code;
 }
 
+#else
 
-int addToQueue (influx_client_t* c, char * line) {
+
+
+int protoPrefixLen[] = {4,5,2,3,0,0};
+const char * protocolsStr[] = {"http","https","ws","wss",NULL,NULL};
+
+const char *getTransportProtoStr(transport_proto_t t) {
+	if (t < 0 || t > proto_unknown) return NULL;
+	return protocolsStr[t];
+}
+
+transport_proto_t getTransportProto (const char *url) {
+	if (!url) return proto_unknown;
+	char *c = strstr((char *)url,"://");
+	if (!c) return proto_unknown;
+	size_t len = c - url;
+	for (int i=0;i<proto_unknown;i++) {
+		if(protocolsStr[i])
+			if (len == strlen(protocolsStr[i])) {
+				if (strncasecmp(url,protocolsStr[i],len) == 0) return (transport_proto_t)i;
+			}
+	}
+
+	return (proto_none);
+}
+
+int transportIsWebsocket (const char *url) {
+	transport_proto_t t = getTransportProto (url);
+	return ((t == proto_ws) || (t == proto_wss));
+}
+
+
+transport_proto_t changeTransportProto (char **url, transport_proto_t t) {
+	int newSize;
+
+	if (t<0 || t>proto_unknown) return proto_unknown;
+	if (! protocolsStr[t]) return proto_unknown;
+
+	transport_proto_t oldT = getTransportProto(*url);
+	if (t != oldT) {
+		int oldSize = strlen(*url);
+		newSize = oldSize - protoPrefixLen[oldT] + protoPrefixLen[t] + 1;
+		if (oldT == proto_none) newSize += 4;		// ://
+		if (oldT == proto_unknown) newSize += 8;	// could be https://
+		char * newUrl = (char *)malloc(newSize+1);
+		strcpy(newUrl,protocolsStr[t]);
+		strcat(newUrl,"://");
+		char *c = strstr((char *)*url,"://");
+		if (c) c+=3; else c = *url;
+		strcat(newUrl,c);
+		free(*url);
+		*url = newUrl;
+	}
+	return t;
+}
+
+
+
+int post_http_send_line(influx_client_t *c, char *buf, int len) {
+	int res;
+	long response_code;
+
+	assert(c != NULL);
+
+	if (!c->ch) {
+		char * strbuf;
+		c->ch = curl_easy_init();
+		assert(c->ch != NULL);
+		assert(c->port <= 0xffff);
+		assert(c->port >= 0);
+
+		// add http:// if needed
+		if (getTransportProto (c->host) == proto_none) changeTransportProto (&c->host, proto_http);
+
+		if (!c->url) {
+			if (verbose > 3) curl_easy_setopt(c->ch, CURLOPT_VERBOSE, 1L);
+			if (c->isGrafana) {
+				// v2 api
+				char *urlFormat="%s:%d/api/live/push/%s";
+				int urlSize = strlen(urlFormat);
+				urlSize+=strlen(c->host);
+				urlSize+=strlen(c->grafanaPushID);
+				urlSize+=8;
+				c->url = malloc(urlSize);
+				if (c->url==NULL) return -2;
+				//printf("pushid: %s %d\n",c->grafanaPushID,c->port?c->port:3000);
+				sprintf(c->url, (char *)urlFormat, c->host, c->port?c->port:3000, c->grafanaPushID);
+
+				char *authFormat = "Authorization: Bearer %s";
+				int authSize = strlen(authFormat)-2;
+				authSize+=strlen(c->token);
+				authSize++;
+				strbuf = (char *)malloc(authSize);
+				sprintf(strbuf,authFormat,c->token);
+				c->ch_headers = curl_slist_append(NULL,strbuf); free(strbuf);
+				curl_slist_append(c->ch_headers,"Content-Type: text/plain; charset=utf-8");
+				curl_easy_setopt(c->ch, CURLOPT_HTTPHEADER, c->ch_headers);
+				if (transportIsWebsocket(c->url)) {
+					res = curl_easy_setopt(c->ch, CURLOPT_URL, c->url);
+					if (res) {
+						EPRINTFN("curl_easy_setopt(CURLOPT_URL,\"%s\") failed with %d (%s)",c->url,res,curl_easy_strerror(res));
+						curl_easy_cleanup(c->ch); c->ch = NULL;
+						return res;
+					};
+					res = curl_easy_setopt(c->ch, CURLOPT_CONNECT_ONLY, 2);
+					if (res) {
+						EPRINTFN("curl_easy_setopt(CURLOPT_CONNECT_ONLY) for '%s' failed with %d (%s)",c->url,res,curl_easy_strerror(res));
+						curl_easy_cleanup(c->ch); c->ch = NULL;
+						return res;
+					}
+					VPRINTFN(0,"Connecting to grafana at %s",c->url);
+					res = curl_easy_perform(c->ch);
+					if (res == CURLE_HTTP_RETURNED_ERROR) {
+						int res2 = curl_easy_getinfo(c->ch, CURLINFO_RESPONSE_CODE, &response_code);
+						if (!res2) res = response_code;
+					}
+					if (res) {
+						EPRINTFN("curl_easy_perform to '%s' returned %d (%s), trying http instead",c->url,res,curl_easy_strerror(res));
+						if (getTransportProto (c->url) == proto_wss)
+							changeTransportProto (&c->host, proto_https);
+							else changeTransportProto (&c->host, proto_http);
+						free(c->url); c->url = NULL;
+						curl_easy_cleanup(c->ch); c->ch = NULL;
+						return post_http_send_line(c,buf,len);
+					} else {
+						c->isWebsocket++;
+					}
+				}
+			}
+
+			if (!c->isGrafana && c->org) {
+				// v2 api
+				char *urlFormat="%s:%d/api/v2/write?org=%s&bucket=%s";
+				int urlSize = strlen(urlFormat);
+				urlSize+=strlen(c->host);
+				urlSize+=strlen(c->org);
+				urlSize+=strlen(c->bucket);
+				urlSize+=5;	// port
+				c->url = malloc(urlSize);
+				if (c->url==NULL) return -2;
+				sprintf((char *)c->url, urlFormat,c->host,c->port?c->port:8086,c->org, c->bucket);
+
+				char *authFormat = "Authorization: Token %s";
+				int authSize = strlen(authFormat)-2;
+				authSize+=strlen(c->token);
+				authSize++;
+				strbuf = (char *)malloc(authSize);
+				sprintf(strbuf,authFormat,c->token);
+				c->ch_headers = curl_slist_append(NULL,strbuf); free(strbuf);
+				curl_slist_append(c->ch_headers,"Content-Type: text/plain; charset=utf-8");
+				//curl_slist_append(c->ch_headers,"Accept: application/json");
+				curl_easy_setopt(c->ch, CURLOPT_HTTPHEADER, c->ch_headers);
+				VPRINTFN(0,"Connecting to influxdb2 server at %s",c->url);
+			} else
+			if (!c->isGrafana) {
+				// influx v1 untested
+				char *urlFormat="%s:%d/write?db=%s%s%s%s%s";
+				int urlSize = strlen(urlFormat);
+				urlSize+=strlen(c->host);
+				urlSize+=5;	// port
+				if (c->usr) urlSize+=strlen(c->usr)+3;
+				if (c->pwd) urlSize+=strlen(c->pwd)+3;
+				if (! c->db) {
+					LOGN(0,"post_http_send_line: no database name specified");
+					return -5;
+				}
+				urlSize+=strlen(c->db);
+				urlSize+=strlen(c->host);
+				c->url=(char *)malloc(urlSize);
+				if (c->url==NULL) return -2;
+				sprintf(c->url, urlFormat,
+					c->host, c->port?c->port:8086, c->db, c->usr ? "&u=" : "",c->usr ? c->usr : "", c->pwd ? "&p=" : "", c->pwd ? c->pwd : "");
+				VPRINTFN(0,"Connecting to influxdb1 server at %s",c->url);
+			}
+		}
+		curl_easy_setopt(c->ch, CURLOPT_URL, c->url);
+		//curl_easy_setopt(c->ch, CURLOPT_PORT, c->port);
+	}
+
+	if (c->isWebsocket) {
+		size_t sent = 0;
+		size_t rlen;
+		const struct curl_ws_frame *meta;
+
+		// this is to answer ping handled by libcurl
+		curl_ws_recv(c->ch, NULL, 0, &rlen, &meta);
+		//if (res) LOGN(8,"curl_ws_recv 1 (CURLWS_PING) to \"%s\" failed with %d (%s), closing connection",c->url,res,curl_easy_strerror(res));
+
+		if (!len) return 0;		// only to answer ping from server
+
+		while (len) {
+			res = curl_ws_send(c->ch, buf, len, &sent, 0, CURLWS_TEXT);
+			if (res) {
+				EPRINTFN("curl_ws_send to \"%s\" failed with %d (%s), closing connection",c->url,res,curl_easy_strerror(res));
+				curl_easy_cleanup(c->ch);
+				c->ch = NULL;	// reconnect next time
+				free(c->url);
+				c->url = NULL;
+				return -1;
+			}
+			len -= sent;
+			buf += sent;
+		}
+		return 0;
+	} else {
+		if (len <= 0) return 0;
+		/* Set size of the POST data */
+		curl_easy_setopt(c->ch, CURLOPT_POSTFIELDSIZE, len);
+
+		//printf("Buf:'%s'\n",buf);
+		/* Pass in a pointer of data - libcurl will not copy */
+		curl_easy_setopt(c->ch, CURLOPT_POSTFIELDS, buf);
+
+		/* Perform the request, res will get the return code */
+		res = curl_easy_perform(c->ch);
+		/* Check for errors */
+		if(res != CURLE_OK && res != CURLE_HTTP_RETURNED_ERROR) {
+			EPRINTF("Posting %s data returned %d (%s)",c->isGrafana?"grafana":"influx",res,curl_easy_strerror(res));
+			return res;
+		}
+
+
+		res = curl_easy_getinfo(c->ch, CURLINFO_RESPONSE_CODE, &response_code);
+		if(res != CURLE_OK) {
+			EPRINTF("curl_easy_getinfo returned %d (%s)",res,curl_easy_strerror(res));
+			return res;
+		}
+		LOGN(4,"Post to influxdb, status: %d",response_code);
+		return response_code / 100 == 2 ? 0 : response_code;
+	}
+}
+
+
+#endif // INFLUXDB_POST_LIBCURL
+
+
+int addToQueue (influx_client_t* c) {
     struct influx_dataRow_t *t;
     struct influx_dataRow_t *t2;
 
@@ -475,7 +755,10 @@ int addToQueue (influx_client_t* c, char * line) {
         t = malloc(sizeof(*t));
         if (! t) return -1;
         t->next=NULL;
-        t->postData=line;
+        t->postData=c->influxBuf;
+        c->influxBuf=NULL;
+        c->influxBufLen=0;
+        c->influxBufUsed=0;
         if (! c->firstEntry) {
             c->firstEntry=t;
         } else {
@@ -532,46 +815,50 @@ int influxdb_deQueue(influx_client_t *c) {
 int influxdb_post_http(influx_client_t* c, ...)
 {
     va_list ap;
-    char *line = NULL;
     int ret_code = 0, len = 0;
 
     va_start(ap, c);
-    len = _format_line((char**)&line, ap);
+    len = _format_line(c, ap);
     va_end(ap);
-    if(len < 0)
-        return -1;
+    if(len < 0) {
+		post_http_send_line(c, NULL, 0);	// for ws ping
+        return 0;
+    }
 
-    ret_code = post_http_send_line(c, line, len);
-    if (ret_code != 0) {
-        if (addToQueue(c,line)<0) {
-            free(line);
-        }
-    } else {
-        free(line);
+    ret_code = post_http_send_line(c, c->influxBuf, len);
+    if (ret_code != 0 && ret_code < 400) {
+		addToQueue(c);
+		c->influxBuf=NULL;
+    }
+    else {
         influxdb_deQueue(c);
     }
+    influxdb_post_freeBuffer(c);
     return ret_code;
 }
 
 // line will be free'd or added to queue if influxdb server is unavailable
-int influxdb_post_http_line(influx_client_t* c, char * line)
+int influxdb_post_http_line(influx_client_t* c)
 {
-    int ret_code = 0, len = strlen(line);
+    int ret_code = 0, len = strlen(c->influxBuf);
 
-    ret_code = post_http_send_line(c, line, len);
+    ret_code = post_http_send_line(c, c->influxBuf, len);
     //printf("rc from post_http_send_line: %d\n",ret_code);
-    if (ret_code != 0) {
-        if (addToQueue(c,line)<0) {
-            free(line);     // queue fill, must ignore this one
+    if (ret_code != 0 && (ret_code < 200 || ret_code >= 500)) {
+        if (addToQueue(c)<0) {
+            influxdb_post_freeBuffer(c);     // queue full, must ignore this one
+        } else {
+			c->influxBuf = NULL;			// pointer moved to queue so no free is needed in influxdb_post_freeBuffer
+			influxdb_post_freeBuffer(c);
         }
     } else {
-        free(line);
+        influxdb_post_freeBuffer(c);
         influxdb_deQueue(c);
     }
     return ret_code;
 }
 
-
+#if 0
 int send_udp_line(influx_client_t* c, char *line, int len)
 {
     int sock = 0, ret = 0;
@@ -598,7 +885,7 @@ END:
     close(sock);
     return ret;
 }
-
+#endif // 0
 
 uint64_t influxdb_getTimestamp()  {
 int res;
