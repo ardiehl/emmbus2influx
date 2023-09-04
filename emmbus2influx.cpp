@@ -529,7 +529,7 @@ int influxAppendData (influx_client_t* c, meter_t *meter, uint64_t timestamp) {
 	rc = influxdb_format_line(c, INFLUX_TS(timestamp), INFLUX_END);
 	if (rc < 0) { EPRINTFN("influxdb_format_line failed, INFLUX_TS"); exit(1); }
 
-	;
+	if (regCount) LOGN(0,"%s: posted %d lines to influx measurement %s",meter->name,regCount,measurement);
 	return regCount;
 }
 
