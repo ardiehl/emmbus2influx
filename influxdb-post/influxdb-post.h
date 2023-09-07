@@ -92,15 +92,20 @@ typedef struct _influx_client_t
 	struct curl_slist *ch_headers;
 	char *url;
 	int isWebsocket;
+	int ssl_verifypeer;
 #else
 	int hostResolved;
     struct addrinfo *ainfo;
 #endif
 } influx_client_t;
 
-influx_client_t* influxdb_post_init (char* host, int port, char* db, char* user, char* pwd, char * org, char *bucket, char *token, int numQueueEntries);
+influx_client_t* influxdb_post_init (char* host, int port, char* db, char* user, char* pwd, char * org, char *bucket, char *token, int numQueueEntries
 #ifdef INFLUXDB_POST_LIBCURL
-influx_client_t* influxdb_post_init_grafana (char* host, int port, char * grafanaPushID, char *token);
+									, int SSL_VerifyPeer
+#endif
+);
+#ifdef INFLUXDB_POST_LIBCURL
+influx_client_t* influxdb_post_init_grafana (char* host, int port, char * grafanaPushID, char *token, int SSL_VerifyPeer);
 #endif // INFLUXDB_POST_LIBCURL
 
 void influxdb_post_freeBuffer(influx_client_t *c);

@@ -57,7 +57,11 @@ int send_udp_line(influx_client_t* c, char *line, int len);
 int _format_line2(influx_client_t* c, va_list ap);
 int _escaped_append(influx_client_t* c, const char* src, const char* escape_seq);
 
-influx_client_t* influxdb_post_init (char* host, int port, char* db, char* user, char* pwd, char * org, char *bucket, char *token, int numQueueEntries) {
+influx_client_t* influxdb_post_init (char* host, int port, char* db, char* user, char* pwd, char * org, char *bucket, char *token, int numQueueEntries
+#ifdef INFLUXDB_POST_LIBCURL
+									, int SSL_VerifyPeer
+#endif
+) {
     influx_client_t* i;
 
     i=calloc(1,sizeof(influx_client_t));
@@ -74,16 +78,18 @@ influx_client_t* influxdb_post_init (char* host, int port, char* db, char* user,
     if (token) i->token=strdup(token);
     i->maxNumEntriesToQueue=numQueueEntries;
     i->lastNeededBufferSize = INFLUX_INITIAL_BUF_SIZE;
-
+#ifdef INFLUXDB_POST_LIBCURL
+	i->ssl_verifypeer = SSL_VerifyPeer;
+#endif
     return i;
 }
 
 #ifdef INFLUXDB_POST_LIBCURL
-influx_client_t* influxdb_post_init_grafana (char* host, int port, char * grafanaPushID, char *token) {
+influx_client_t* influxdb_post_init_grafana (char* host, int port, char * grafanaPushID, char *token, int SSL_VerifyPeer) {
 	if (port == 0) port = 3000;
 	if (grafanaPushID == NULL) return NULL;
 	if (*grafanaPushID == 0) return NULL;
-	influx_client_t* i = influxdb_post_init(host,port,NULL,NULL,NULL,NULL,NULL,token,0);
+	influx_client_t* i = influxdb_post_init(host,port,NULL,NULL,NULL,NULL,NULL,token,0,SSL_VerifyPeer);
 	if (i) {
 		i->isGrafana++;
 		i->grafanaPushID = strdup(grafanaPushID);
@@ -579,8 +585,13 @@ int post_http_send_line(influx_client_t *c, char *buf, int len) {
 		char * strbuf;
 		c->ch = curl_easy_init();
 		assert(c->ch != NULL);
-		assert(c->port <= 0xffff);
-		assert(c->port >= 0);
+		if (! c->ssl_verifypeer) {
+			res = curl_easy_setopt(c->ch, CURLOPT_SSL_VERIFYPEER, 0);
+			if (res) EPRINTFN("curl_easy_setopt(CURLOPT_SSL_VERIFYPEER) for '%s' failed with %d (%s)",c->host,res,curl_easy_strerror(res));
+			res = curl_easy_setopt(c->ch, CURLOPT_SSL_VERIFYHOST, 0);
+			if (res) EPRINTFN("curl_easy_setopt(CURLOPT_SSL_VERIFYPEER) for '%s' failed with %d (%s)",c->host,res,curl_easy_strerror(res));
+		}
+		printf("CURLOPT_SSL_VERIFYPEER, %d, rc: %d\n",c->ssl_verifypeer,res);
 
 		// add http:// if needed
 		if (getTransportProto (c->host) == proto_none) changeTransportProto (&c->host, proto_http);
@@ -643,15 +654,14 @@ int post_http_send_line(influx_client_t *c, char *buf, int len) {
 
 			if (!c->isGrafana && c->org) {
 				// v2 api
-				char *urlFormat="%s:%d/api/v2/write?org=%s&bucket=%s";
+				char *urlFormat="%s/api/v2/write?org=%s&bucket=%s";
 				int urlSize = strlen(urlFormat);
 				urlSize+=strlen(c->host);
 				urlSize+=strlen(c->org);
 				urlSize+=strlen(c->bucket);
-				urlSize+=5;	// port
 				c->url = malloc(urlSize);
 				if (c->url==NULL) return -2;
-				sprintf((char *)c->url, urlFormat,c->host,c->port?c->port:8086,c->org, c->bucket);
+				sprintf((char *)c->url, urlFormat,c->host,c->org, c->bucket);
 
 				char *authFormat = "Authorization: Token %s";
 				int authSize = strlen(authFormat)-2;
@@ -666,11 +676,9 @@ int post_http_send_line(influx_client_t *c, char *buf, int len) {
 				VPRINTFN(0,"Connecting to influxdb2 server at %s",c->url);
 			} else
 			if (!c->isGrafana) {
-				// influx v1 untested
-				char *urlFormat="%s:%d/write?db=%s%s%s%s%s";
+				char *urlFormat="%s/write?db=%s%s%s%s%s";
 				int urlSize = strlen(urlFormat);
 				urlSize+=strlen(c->host);
-				urlSize+=5;	// port
 				if (c->usr) urlSize+=strlen(c->usr)+3;
 				if (c->pwd) urlSize+=strlen(c->pwd)+3;
 				if (! c->db) {
@@ -682,12 +690,12 @@ int post_http_send_line(influx_client_t *c, char *buf, int len) {
 				c->url=(char *)malloc(urlSize);
 				if (c->url==NULL) return -2;
 				sprintf(c->url, urlFormat,
-					c->host, c->port?c->port:8086, c->db, c->usr ? "&u=" : "",c->usr ? c->usr : "", c->pwd ? "&p=" : "", c->pwd ? c->pwd : "");
-				VPRINTFN(0,"Connecting to influxdb1 server at %s",c->url);
+					c->host, c->db, c->usr ? "&u=" : "",c->usr ? c->usr : "", c->pwd ? "&p=" : "", c->pwd ? c->pwd : "");
+				VPRINTF(0,"Connecting to influxdb1 server at %s",c->url);
 			}
 		}
 		curl_easy_setopt(c->ch, CURLOPT_URL, c->url);
-		//curl_easy_setopt(c->ch, CURLOPT_PORT, c->port);
+		curl_easy_setopt(c->ch, CURLOPT_PORT, c->port);
 	}
 
 	if (c->isWebsocket) {
@@ -728,21 +736,20 @@ int post_http_send_line(influx_client_t *c, char *buf, int len) {
 		res = curl_easy_perform(c->ch);
 		/* Check for errors */
 		if(res != CURLE_OK && res != CURLE_HTTP_RETURNED_ERROR) {
-			EPRINTF("Posting %s data returned %d (%s)",c->isGrafana?"grafana":"influx",res,curl_easy_strerror(res));
+			EPRINTFN("Posting %s data returned %d (%s)",c->isGrafana?"grafana":"influx",res,curl_easy_strerror(res));
 			return res;
 		}
 
 
 		res = curl_easy_getinfo(c->ch, CURLINFO_RESPONSE_CODE, &response_code);
 		if(res != CURLE_OK) {
-			EPRINTF("curl_easy_getinfo returned %d (%s)",res,curl_easy_strerror(res));
+			EPRINTFN("curl_easy_getinfo returned %d (%s)",res,curl_easy_strerror(res));
 			return res;
 		}
 		LOGN(4,"Post to influxdb, status: %d",response_code);
 		return response_code / 100 == 2 ? 0 : response_code;
 	}
 }
-
 
 #endif // INFLUXDB_POST_LIBCURL
 
