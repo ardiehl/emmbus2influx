@@ -591,7 +591,7 @@ int post_http_send_line(influx_client_t *c, char *buf, int len) {
 			res = curl_easy_setopt(c->ch, CURLOPT_SSL_VERIFYHOST, 0);
 			if (res) EPRINTFN("curl_easy_setopt(CURLOPT_SSL_VERIFYPEER) for '%s' failed with %d (%s)",c->host,res,curl_easy_strerror(res));
 		}
-		printf("CURLOPT_SSL_VERIFYPEER, %d, rc: %d\n",c->ssl_verifypeer,res);
+		//printf("CURLOPT_SSL_VERIFYPEER, %d, rc: %d\n",c->ssl_verifypeer,res);
 
 		// add http:// if needed
 		if (getTransportProto (c->host) == proto_none) changeTransportProto (&c->host, proto_http);

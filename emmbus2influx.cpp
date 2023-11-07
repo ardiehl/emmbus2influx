@@ -630,7 +630,7 @@ void traceCallback(enum MQTTCLIENT_TRACE_LEVELS level, char *message) {
 //------------------------------------------------------------------------------
 // Iterate over all address masks according to the M-Bus probe algorithm.
 //------------------------------------------------------------------------------
-int mbus_scan_2nd_address_range(mbus_handle * handle, int pos, char *addr_mask)
+int mbus_scan_2nd_address_range2(mbus_handle * handle, int pos, char *addr_mask)
 {
     int i, i_start=0, i_end=0, probe_ret;
     uint64_t mbusAddress;
@@ -670,7 +670,7 @@ int mbus_scan_2nd_address_range(mbus_handle * handle, int pos, char *addr_mask)
         if (pos < 15)
         {
             // mask[pos] is not a wildcard -> don't iterate, recursively check pos+1
-            mbus_scan_2nd_address_range(handle, pos+1, mask);
+            mbus_scan_2nd_address_range2(handle, pos+1, mask);
         }
         else
         {

@@ -6,18 +6,24 @@
 # http://www.rSCADA.se
 # info@rscada.se
 #
+OD=../mbus
 CFLAGS=-Wall -g -I.. -I../mbus
-LDFLAGS=-L.. -L../mbus -lm -lmbus
+#LDFLAGS=-L.. -L../mbus -L../mbus/.libs -lm -l:libmbus.a
+LDFLAGS=-lm
+LINKOBJS = $(OD)/mbus.o  $(OD)/mbus-protocol-aux.o  $(OD)/mbus-protocol.o  $(OD)/mbus-serial.o  $(OD)/mbus-tcp.o
 
-all: mbus-tcp-scan mbus-tcp-request-data
+all: mbus-serial-scan mbus-serial-request-data mbus-serial-set-address
 
 %.o: %.c
 	$(CC) -c $(CFLAGS) $< -o $@
 
-mbus-tcp-scan: mbus-tcp-scan.o mbus-tcp.o
+mbus-serial-scan: $(LINKOBJS) mbus-serial-scan.o
 	gcc -o $@ $^ $(LDFLAGS) 
 	
-mbus-tcp-request-data: mbus-tcp-request-data.o mbus-tcp.o
+mbus-serial-request-data: $(LINKOBJS) mbus-serial-request-data.o
+	gcc -o $@ $^ $(LDFLAGS) 
+
+mbus-serial-set-address: $(LINKOBJS) mbus-serial-set-address.o
 	gcc -o $@ $^ $(LDFLAGS) 
 
 clean:
