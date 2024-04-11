@@ -89,9 +89,11 @@ endif
 endif
 
 ifeq ($(CURLSTATIC),1)
-CURLVERSION  = 8.4.0
+# CURLVERSION  = 8.4.0
+CURLVERSION  = 8.7.1
+CURLVERSION2 = $(subst .,_,$(CURLVERSION))
 CURLSRCFILE  = curl-$(CURLVERSION).tar.xz
-CURLSRC      = https://github.com/curl/curl/releases/download/curl-8_4_0/$(CURLSRCFILE)
+CURLSRC      = https://github.com/curl/curl/releases/download/curl-$(CURLVERSION2)/$(CURLSRCFILE)
 CURLDIR      = curl$(ARCH)$(TGT)
 CURLTAR      = $(CURLDIR)/$(CURLSRCFILE)
 CURLMAKEDIR  = $(CURLDIR)/curl-$(CURLVERSION)
@@ -134,7 +136,7 @@ $(MQTTLIBP):
 	@cd paho; ./buildmqtt || exit 1; cd ..
 endif
 
-# ------------------------ libmcurl static -----------------------------------
+# ------------------------ libcurl static -----------------------------------
 ifeq ($(CURLSTATIC),1)
 
 $(CURLTAR):
@@ -220,11 +222,17 @@ info:
 	@echo "    MQTTLIBDIR: $(MQTTLIBDIR)"
 	@echo "       MQTTLIB: $(MQTTLIB)"
 	@echo "    CURLSTATIC: $(CURLSTATIC)"
+ifeq ($(CURLSTATIC),1)
+	@echo "   CURLVERSION: $(CURLVERSION) ($(CURLVERSION2))"
 	@echo "       CURLLIB: $(CURLLIB)"
 	@echo "       CURLDIR: $(CURLDIR)"
 	@echo "       CURLTAR: $(CURLTAR)"
+	@echo "       CURLSRC: $(CURLSRC)"
+endif
 	@echo "MUPARSERSTATIC: $(MUPARSERSTATIC)"
+ifeq ($(MUPARSERSTATIC),1)
 	@echo "   MUPARSERLIB: $(MUPARSERLIB)"
 	@echo "   MUPARSERTAR: $(MUPARSERTAR)"
+endif
 	@echo "   INSTALLDIRS: $(INSTALLDIR_BIN) $(INSTALLDIR_CFG) $(INSTALLDIR_SYS)"
 	@echo "$(notdir $(MUPARSERSRC))"
