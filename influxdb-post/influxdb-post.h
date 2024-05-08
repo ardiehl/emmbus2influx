@@ -93,6 +93,7 @@ typedef struct _influx_client_t
 	char *url;
 	int isWebsocket;
 	int ssl_verifypeer;
+	int firstConnectionAttempt;
 #else
 	int hostResolved;
     struct addrinfo *ainfo;

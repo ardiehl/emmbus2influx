@@ -25,14 +25,18 @@ void log_setVerboseLevel (int verboseLevel);
 void log_incVerboseLevel();
 void log_setSyslogTarget (const char * progName);
 void log_close();
-void log_fprintf(FILE *stream, const char *format, ...);
-void log_fprintfn(FILE *stream, const char *format, ...);
+void log_fprintf(FILE *stream, int priority, const char *format, ...);
+void log_fprintfn(FILE *stream, int priority, const char *format, ...);
 
-#define VPRINTF(LEVEL, FORMAT, ...) if (log_verbosity >= LEVEL) log_fprintf(stdout, FORMAT, ##__VA_ARGS__)
-#define VPRINTFN(LEVEL, FORMAT, ...) if (log_verbosity >= LEVEL) log_fprintfn(stdout, FORMAT, ##__VA_ARGS__)
-#define PRINTF(FORMAT, ...) if (log_verbosity >= 0) log_fprintf(stdout, FORMAT, ##__VA_ARGS__)
-#define EPRINTF(FORMAT, ...)  log_fprintf(stderr, FORMAT, ##__VA_ARGS__)
-#define EPRINTFN(FORMAT, ...) log_fprintfn(stderr, FORMAT, ##__VA_ARGS__)
+#define VPRINTF(LEVEL, FORMAT, ...) if (log_verbosity >= LEVEL) log_fprintf(stdout, LOG_INFO, FORMAT, ##__VA_ARGS__)
+#define VPRINTFN(LEVEL, FORMAT, ...) if (log_verbosity >= LEVEL) log_fprintfn(stdout, LOG_INFO, FORMAT, ##__VA_ARGS__)
+#define PRINTF(FORMAT, ...) if (log_verbosity >= 0) log_fprintf(stdout, LOG_INFO, FORMAT, ##__VA_ARGS__)
+#define PRINTFN(FORMAT, ...) log_fprintfn(stdout, LOG_INFO, FORMAT, ##__VA_ARGS__)
+#define EPRINTF(FORMAT, ...)  log_fprintf(stderr, LOG_ERR, FORMAT, ##__VA_ARGS__)
+#define EPRINTFN(FORMAT, ...) log_fprintfn(stderr, LOG_ERR, FORMAT, ##__VA_ARGS__)
+#define WPRINTF(FORMAT, ...)  log_fprintf(stderr, LOG_WARNING, FORMAT, ##__VA_ARGS__)
+#define WPRINTFN(FORMAT, ...) log_fprintfn(stderr, LOG_WARNING, FORMAT, ##__VA_ARGS__)
+
 //#define LOG(...) PRINTF(__VA_ARGS__)
 #define LOG VPRINTF
 #define LOGN VPRINTFN

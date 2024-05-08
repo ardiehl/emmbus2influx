@@ -23,21 +23,21 @@ void log_setSyslogTarget (const char * progName) {
 #endif
 }
 
-void log_fprintf(FILE *stream, const char *format, ...)
+void log_fprintf(FILE *stream, int priority, const char *format, ...)
 {
 	va_list args;
     va_start(args, format);
-    if (log_syslog) vsyslog(LOG_INFO,format,args);
+    if (log_syslog) vsyslog(priority,format,args);
 	else vfprintf(stream,format,args);
     va_end(args);
 }
 
-void log_fprintfn(FILE *stream, const char *format, ...)
+void log_fprintfn(FILE *stream, int priority, const char *format, ...)
 {
 	va_list args;
     va_start(args, format);
     if (log_syslog) {
-		vsyslog(LOG_INFO,format,args);
+		vsyslog(priority,format,args);
     } else {
     	vfprintf(stream,format,args);
     	fprintf(stream,"\n");

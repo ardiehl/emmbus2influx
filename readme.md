@@ -1,7 +1,11 @@
 # emmbus2influx
 ## read wired M-Bus devices (Serial or TCP) and write to infuxdb (V1 or V2) and/or MQTT
 
-still work in progress, works but not yet long time tested
+now runs for several months, problems fixed: 
+queueing did not work when influxdb was temporary not avaiable
+crash when grafana was not available
+in case there are some memoty leaks, i restart it once a month via cron jobs
+I have running it on an rpi4 that is running emModbs2influx, ruuvi2influx as well as pylon2influx.
 
 ### Definitions
 - **MeterType** - a definition of the fields (from records)

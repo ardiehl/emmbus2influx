@@ -39,7 +39,7 @@ and send the data to influxdb (1.x or 2.x API) and/or via mqtt
 
 #include "MQTTClient.h"
 #include "cron.h"
-#define VER "1.05 Armin Diehl <ad@ardiehl.de> Sep 7,2023, compiled " __DATE__ " " __TIME__
+#define VER "1.06 Armin Diehl <ad@ardiehl.de> May 8,2024, compiled " __DATE__ " " __TIME__
 #define ME "emmbus2influx"
 #define CONFFILE "emmbus2influx.conf"
 
