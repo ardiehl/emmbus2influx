@@ -26,6 +26,7 @@
 #include <inttypes.h>
 #include <assert.h>
 #include <time.h>
+#include<signal.h>
 
 #define INFLUX_TIMEOUT_SECONDS 5
 #define INFLUX_DEQUEUE_AT_ONCE 50
@@ -576,6 +577,21 @@ transport_proto_t changeTransportProto (char **url, transport_proto_t t) {
 }
 
 
+static int curlDebugCallback(CURL *handle, curl_infotype type, char *data, size_t size,void *clientp) {
+
+  (void)handle; /* prevent compiler warning */
+  (void)clientp;
+
+  if (verbose <3) return 0;
+  switch(type) {
+	case CURLINFO_TEXT:
+		//fputs("== Info: ", stderr);	fwrite(data, size, 1, stderr);
+		EPRINTF("== Info: %s",data);
+	default: /* in case a new one is introduced to shock us */
+		return 0;
+  }
+}
+
 
 int post_http_send_line(influx_client_t *c, char *buf, int len) {
 	int res;
@@ -595,6 +611,7 @@ int post_http_send_line(influx_client_t *c, char *buf, int len) {
 		}
 		//printf("CURLOPT_SSL_VERIFYPEER, %d, rc: %d\n",c->ssl_verifypeer,res);
 
+		curl_easy_setopt(c->ch, CURLOPT_DEBUGFUNCTION, curlDebugCallback);
 		// add http:// if needed
 		if (getTransportProto (c->host) == proto_none) changeTransportProto (&c->host, proto_http);
 
@@ -723,7 +740,9 @@ int post_http_send_line(influx_client_t *c, char *buf, int len) {
 		if (!len) return 0;		// only to answer ping from server
 
 		while (len) {
+			curl_easy_setopt(c->ch,CURLOPT_VERBOSE, 1);
 			res = curl_ws_send(c->ch, buf, len, &sent, 0, CURLWS_TEXT);
+			curl_easy_setopt(c->ch,CURLOPT_VERBOSE, 0);
 			if (res) {
 				EPRINTFN("curl_ws_send to \"%s\" failed with %d (%s), closing connection",c->url,res,curl_easy_strerror(res));
 				//curl_slist_free_all(c->ch);  // sigsegv sometimes with curl 8.4.0 ??
@@ -733,6 +752,7 @@ int post_http_send_line(influx_client_t *c, char *buf, int len) {
 				c->ch = NULL;	// reconnect next time
 				EPRINTFN("curl_ws_send to \"%s\" closed connection",c->url);
 				free(c->url); c->url = NULL;
+				//kill(getpid(),SIGINT);	// terminate for debug
 				return -1;
 			}
 			len -= sent;
