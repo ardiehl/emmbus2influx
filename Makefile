@@ -90,7 +90,7 @@ endif
 
 ifeq ($(CURLSTATIC),1)
 # CURLVERSION  = 8.4.0
-CURLVERSION  = 8.7.1
+CURLVERSION  = 8.9.1
 CURLVERSION2 = $(subst .,_,$(CURLVERSION))
 CURLSRCFILE  = curl-$(CURLVERSION).tar.xz
 CURLSRC      = https://github.com/curl/curl/releases/download/curl-$(CURLVERSION2)/$(CURLSRCFILE)
