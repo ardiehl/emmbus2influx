@@ -593,7 +593,7 @@ static int curlDebugCallback(CURL *handle, curl_infotype type, char *data, size_
 }
 
 
-int post_http_send_line(influx_client_t *c, char *buf, int len) {
+int post_http_send_line(influx_client_t *c, char *buf, int len, int showSendErr) {
 	int res;
 	long response_code;
 
@@ -669,7 +669,7 @@ int post_http_send_line(influx_client_t *c, char *buf, int len) {
 						free(c->url); c->url = NULL;
 						curl_slist_free_all(c->ch);
 						curl_easy_cleanup(c->ch); c->ch = NULL;
-						return post_http_send_line(c,buf,len);
+						return post_http_send_line(c,buf,len,showSendErr);
 					} else {
 						c->isWebsocket = 1;
 						c->firstConnectionAttempt = 0;
@@ -744,11 +744,11 @@ int post_http_send_line(influx_client_t *c, char *buf, int len) {
 			res = curl_ws_send(c->ch, buf, len, &sent, 0, CURLWS_TEXT);
 			curl_easy_setopt(c->ch,CURLOPT_VERBOSE, 0);
 			if (res) {
-				EPRINTFN("curl_ws_send to \"%s\" failed with %d (%s), closing connection",c->url,res,curl_easy_strerror(res));
+				if (showSendErr) EPRINTFN("curl_ws_send to \"%s\" failed with %d (%s), closing connection",c->url,res,curl_easy_strerror(res));
 				//curl_slist_free_all(c->ch);  // sigsegv sometimes with curl 8.4.0 ??
 				//EPRINTFN("curl_slist_free_all: done");
 				curl_easy_cleanup(c->ch);
-				EPRINTFN("curl_easy_cleanup: done");
+				VPRINTFN(4,"curl_easy_cleanup: done");
 				c->ch = NULL;	// reconnect next time
 				EPRINTFN("curl_ws_send to \"%s\" closed connection",c->url);
 				free(c->url); c->url = NULL;
@@ -772,7 +772,7 @@ int post_http_send_line(influx_client_t *c, char *buf, int len) {
 		res = curl_easy_perform(c->ch);
 		/* Check for errors */
 		if(res != CURLE_OK && res != CURLE_HTTP_RETURNED_ERROR) {
-			EPRINTFN("Posting %s data returned %d (%s)",c->isGrafana?"grafana":"influx",res,curl_easy_strerror(res));
+			if (showSendErr) EPRINTFN("Posting %s data returned %d (%s)",c->isGrafana?"grafana":"influx",res,curl_easy_strerror(res));
 			//curl_slist_free_all(c->ch);	// this will result in a segfault
 			curl_easy_cleanup(c->ch);
 			c->ch = NULL;	// reconnect next time
@@ -839,7 +839,7 @@ int influxdb_deQueue(influx_client_t *c) {
         LOGN(0,"beginning dequeing, %d remaining",c->numEntriesQueued);
         do {
             //if (c->firstEntry) {}
-            res = post_http_send_line(c, c->firstEntry->postData, strlen(c->firstEntry->postData));
+            res = post_http_send_line(c, c->firstEntry->postData, strlen(c->firstEntry->postData),1);
             if (res == 0) {
                 t = c->firstEntry;
                 c->firstEntry = t->next;
@@ -872,11 +872,14 @@ int influxdb_post_http(influx_client_t* c, ...)
     len = _format_line(c, ap);
     va_end(ap);
     if(len < 0) {
-		post_http_send_line(c, NULL, 0);	// for ws ping
+		post_http_send_line(c, NULL, 0, 1);	// for ws ping
         return 0;
     }
 
-    ret_code = post_http_send_line(c, c->influxBuf, len);
+    ret_code = post_http_send_line(c, c->influxBuf, len,0);	// do not show send errors
+    if (ret_code != 0 && ret_code < 400)
+	ret_code = post_http_send_line(c, c->influxBuf, len,1);	// show send errors here
+
     if (ret_code != 0 && ret_code < 400) {
 		addToQueue(c);
 		c->influxBuf=NULL;
@@ -893,7 +896,9 @@ int influxdb_post_http_line(influx_client_t* c)
 {
     int ret_code = 0, len = strlen(c->influxBuf);
 
-    ret_code = post_http_send_line(c, c->influxBuf, len);
+    ret_code = post_http_send_line(c, c->influxBuf, len, 0);	// dont show send errors
+    if (ret_code != 0 && (ret_code < 200 || ret_code >= 500))
+	ret_code = post_http_send_line(c, c->influxBuf, len, 1);	// retry and show send errors
     //printf("rc from post_http_send_line: %d\n",ret_code);
     if (ret_code != 0 && (ret_code < 200 || ret_code >= 500)) {
         if (addToQueue(c)<0) {

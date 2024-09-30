@@ -15,7 +15,7 @@ CURLSTATIC = 1
 TARGETS = emmbus2influx
 
 # OS dependend executables
-WGET           = wget -q --show-progress
+WGET           = wget
 TAR            = tar
 MAKEDIR        = mkdir -p
 RM             = rm -f
@@ -52,11 +52,9 @@ SOURCES      = $(wildcard *.c influxdb-post/*.c libmbus/mbus/*.c *.cpp) ccronexp
 OBJECTS      = $(filter %.o, $(patsubst %.c, $(OBJDIR)/%.o, $(SOURCES)) $(patsubst %.cpp, $(OBJDIR)/%.o, $(SOURCES)))
 MAINOBJS     = $(patsubst %, $(OBJDIR)/%.o,$(TARGETS))
 LINKOBJECTS  = $(filter-out $(MAINOBJS), $(OBJECTS))
-#MAINOBJS    = $(patsubst %, $(OBJDIR)/%.o,$(ALLTARGETS))
 DEPS         = $(OBJECTS:.o=.d)
 
 ifeq ($(PAHOSTATIC),1)
-#MQTTLIBDIR  = $(shell ./getmqttlibdir)
 ifeq ($(TGT),-gx)
 MQTTLIBDIR   = mqtt-gx/lib
 else
@@ -89,8 +87,7 @@ endif
 endif
 
 ifeq ($(CURLSTATIC),1)
-# CURLVERSION  = 8.4.0
-CURLVERSION  = 8.9.1
+CURLVERSION  = 8.10.1
 CURLVERSION2 = $(subst .,_,$(CURLVERSION))
 CURLSRCFILE  = curl-$(CURLVERSION).tar.xz
 CURLSRC      = https://github.com/curl/curl/releases/download/curl-$(CURLVERSION2)/$(CURLSRCFILE)
@@ -148,7 +145,7 @@ $(CURLMAKE):        $(CURLTAR)
 	@echo "unpacking $(CURLSRCFILE)"
 	@cd $(CURLDIR); $(XZUNPACK) $(CURLSRCFILE) | $(TAR) xv
 	@echo "Generating Makefile"
-	@cd $(CURLMAKEDIR); ./configure --without-psl --disable-file --disable-ldap --disable-ldaps --disable-tftp --disable-dict --without-libidn2 --with-openssl --enable-websockets  --disable-ftp --disable-rtsp --disable-telnet --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-mqtt --disable-manual --disable-ntlm --disable-unix-sockets --disable-cookies --without-brotli
+	@cd $(CURLMAKEDIR); ./configure --without-psl --disable-file --disable-ldap --disable-ldaps --disable-tftp --disable-dict --without-libidn2 --with-openssl --enable-websockets  --disable-ftp --disable-rtsp --disable-telnet --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-mqtt --disable-manual --disable-ntlm --disable-unix-sockets --disable-cookies --without-brotli --without-libpsl
 	@echo
 
 $(CURLLIB): $(CURLMAKE)
@@ -185,10 +182,13 @@ install: $(ALLTARGETS)
 	$(SUDO) $(MAKEDIR) $(INSTALLDIR_BIN)
 	$(SUDO) $(MAKEDIR) $(INSTALLDIR_CFG)
 	$(SUDO) $(MAKEDIR) $(INSTALLDIR_SYS)
+	@echo "stop"
+	$(SUDO) systemctl is-active --quiet emmbus2influx && systemctl stop emmbus2influx; sleep 2
 	$(SUDO) $(COPY) $(TARGETS) $(INSTALLDIR_BIN)
 	$(SUDO) $(COPY) emmbus2influx.service $(INSTALLDIR_SYS)
 #	$(SUDO) $(COPY) emmbus2influx.conf $(INSTALLDIR_CFG)
 	$(SUDO) $(SYSTEMD_RELOAD)
+	$(SUDO) systemctl start emmbus2influx
 
 clean:
 	@$(RM) $(OBJECTS) $(TARGETS) $(DEPS) $(MUPARSERLIB) $(MQTTLIBP)

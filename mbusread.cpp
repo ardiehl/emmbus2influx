@@ -888,8 +888,8 @@ int mbusSelectSlave (mbus_handle *mb, int verbose, uint64_t * mbusAddress) {
 
 
 
-#define RETRY_COUNT 4
-#define RETRY_DELAY 5000
+#define RETRY_COUNT 2
+#define RETRY_DELAY 15000
 
 int queryMeter(int verboseMsg, meter_t *meter) {
 	meterRegisterRead_t *meterRegisterRead;
