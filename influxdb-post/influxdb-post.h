@@ -75,6 +75,7 @@ typedef struct _influx_client_t
     char* org; // organization v2 api
     char *bucket; // v2 api
     char *token;  // v2 api
+    char *apiStr; // if set,db..token will be ignored and only this string is send in the http header, e.g. /write?username=Admin?password=questdb
     int maxNumEntriesToQueue;  // for buffer in case of send failures
     int numEntriesQueued;
     struct influx_dataRow_t* firstEntry;
@@ -84,6 +85,7 @@ typedef struct _influx_client_t
 	size_t influxBufLen;
 	char * influxBuf;
 	int last_type;
+
 
 #ifdef INFLUXDB_POST_LIBCURL
 	int isGrafana;
@@ -100,7 +102,7 @@ typedef struct _influx_client_t
 #endif
 } influx_client_t;
 
-influx_client_t* influxdb_post_init (char* host, int port, char* db, char* user, char* pwd, char * org, char *bucket, char *token, int numQueueEntries
+influx_client_t* influxdb_post_init (char* host, int port, char* db, char* user, char* pwd, char * org, char *bucket, char *token, int numQueueEntries, char *api
 #ifdef INFLUXDB_POST_LIBCURL
 									, int SSL_VerifyPeer
 #endif

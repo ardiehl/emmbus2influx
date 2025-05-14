@@ -58,7 +58,7 @@ int send_udp_line(influx_client_t* c, char *line, int len);
 int _format_line2(influx_client_t* c, va_list ap);
 int _escaped_append(influx_client_t* c, const char* src, const char* escape_seq);
 
-influx_client_t* influxdb_post_init (char* host, int port, char* db, char* user, char* pwd, char * org, char *bucket, char *token, int numQueueEntries
+influx_client_t* influxdb_post_init (char* host, int port, char* db, char* user, char* pwd, char * org, char *bucket, char *token, int numQueueEntries, char *api
 #ifdef INFLUXDB_POST_LIBCURL
 									, int SSL_VerifyPeer
 #endif
@@ -77,6 +77,7 @@ influx_client_t* influxdb_post_init (char* host, int port, char* db, char* user,
     if (org) i->org=strdup(org);
     if (bucket) i->bucket=strdup(bucket);
     if (token) i->token=strdup(token);
+    if (api) i->apiStr=strdup(api);
     i->maxNumEntriesToQueue=numQueueEntries;
     i->lastNeededBufferSize = INFLUX_INITIAL_BUF_SIZE;
     i->firstConnectionAttempt = 1;
@@ -91,7 +92,7 @@ influx_client_t* influxdb_post_init_grafana (char* host, int port, char * grafan
 	if (port == 0) port = 3000;
 	if (grafanaPushID == NULL) return NULL;
 	if (*grafanaPushID == 0) return NULL;
-	influx_client_t* i = influxdb_post_init(host,port,NULL,NULL,NULL,NULL,NULL,token,0,SSL_VerifyPeer);
+	influx_client_t* i = influxdb_post_init(host,port,NULL,NULL,NULL,NULL,NULL,token,0,NULL,SSL_VerifyPeer);
 	if (i) {
 		i->isGrafana++;
 		i->grafanaPushID = strdup(grafanaPushID);
@@ -617,6 +618,7 @@ int post_http_send_line(influx_client_t *c, char *buf, int len, int showSendErr)
 
 		if (!c->url) {
 			if (verbose > 3) curl_easy_setopt(c->ch, CURLOPT_VERBOSE, 1L);
+
 			if (c->isGrafana) {
 				// v2 api
 				char *urlFormat="%s:%d/api/live/push/%s";
@@ -682,6 +684,20 @@ int post_http_send_line(influx_client_t *c, char *buf, int len, int showSendErr)
 				}
 			}
 
+			if (!c->isGrafana && c->apiStr) {
+				char *urlFormat="%s:%d%s";
+				int urlSize = strlen(urlFormat);
+				urlSize+=strlen(c->host);
+				urlSize+=strlen(c->apiStr);
+				urlSize+=8;
+				c->url = malloc(urlSize);
+				if (c->url==NULL) return -2;
+				sprintf(c->url, (char *)urlFormat, c->host, c->port?c->port:8086, c->apiStr);
+				c->ch_headers = curl_slist_append(NULL,"Content-Type: text/plain; charset=utf-8");
+				curl_easy_setopt(c->ch, CURLOPT_HTTPHEADER, c->ch_headers);
+				PRINTFN("Using influxdb writer at %s",c->url);
+
+			} else
 			if (!c->isGrafana && c->org) {
 				// v2 api
 				char *urlFormat="%s/api/v2/write?org=%s&bucket=%s";

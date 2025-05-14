@@ -87,7 +87,7 @@ endif
 endif
 
 ifeq ($(CURLSTATIC),1)
-CURLVERSION  = 8.10.1
+CURLVERSION  = 8.13.0
 CURLVERSION2 = $(subst .,_,$(CURLVERSION))
 CURLSRCFILE  = curl-$(CURLVERSION).tar.xz
 CURLSRC      = https://github.com/curl/curl/releases/download/curl-$(CURLVERSION2)/$(CURLSRCFILE)
@@ -145,7 +145,7 @@ $(CURLMAKE):        $(CURLTAR)
 	@echo "unpacking $(CURLSRCFILE)"
 	@cd $(CURLDIR); $(XZUNPACK) $(CURLSRCFILE) | $(TAR) xv
 	@echo "Generating Makefile"
-	@cd $(CURLMAKEDIR); ./configure --without-psl --disable-file --disable-ldap --disable-ldaps --disable-tftp --disable-dict --without-libidn2 --with-openssl --enable-websockets  --disable-ftp --disable-rtsp --disable-telnet --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-mqtt --disable-manual --disable-ntlm --disable-unix-sockets --disable-cookies --without-brotli --without-libpsl
+	@cd $(CURLMAKEDIR); ./configure --without-psl --disable-file --disable-ldap --disable-ldaps --disable-tftp --disable-dict --without-libidn2 --with-openssl --enable-websockets  --disable-ftp --disable-rtsp --disable-telnet --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-mqtt --disable-manual --disable-ntlm --disable-unix-sockets --disable-cookies --without-brotli --without-libpsl --without-nghttp2 --without-nghttp3
 	@echo
 
 $(CURLLIB): $(CURLMAKE)

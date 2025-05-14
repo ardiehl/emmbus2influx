@@ -39,7 +39,7 @@ and send the data to influxdb (1.x or 2.x API) and/or via mqtt
 
 #include "MQTTClient.h"
 #include "cron.h"
-#define VER "1.08 Armin Diehl <ad@ardiehl.de> Sep, 30,2024, compiled " __DATE__ " " __TIME__
+#define VER "1.10 Armin Diehl <ad@ardiehl.de> May, 14,2025, compiled " __DATE__ " " __TIME__
 #define ME "emmbus2influx"
 #define CONFFILE "emmbus2influx.conf"
 
@@ -90,7 +90,7 @@ char *gpushid;
 int gUseInfluxMeasurement;
 int gVerifyPeer = 1;
 influx_client_t *gClient;
-
+char * influxApiStr;
 
 int syslogTestCallback(argParse_handleT *a, char * arg) {
 	VPRINTF(0,"%s : sending testtext via syslog\n\n",ME);
@@ -171,6 +171,7 @@ int parseArgs (int argc, char **argv) {
 		AP_OPT_STRVAL       (1,'B',"bucket"         ,&bucket               ,"Influxdb v2 bucket")
 		AP_OPT_STRVAL       (1,'O',"org"            ,&org                  ,"Influxdb v2 org")
 		AP_OPT_STRVAL       (0,'T',"token"          ,&token                ,"Influxdb v2 auth api token")
+		AP_OPT_STRVAL       (0,'A',"influxapi"      ,&influxApiStr         ,"Influxdb api string, if specified db..token will not be used")
 		AP_OPT_INTVAL       (0, 0 ,"influxwritemult",&influxWriteMult      ,"Influx write multiplicator")
 		AP_OPT_INTVAL       (1,0  ,"isslverifypeer" ,&iVerifyPeer          ,"Influx SSL certificate verification (0=off)")
 		AP_OPT_INTVAL       (1,'c',"cache"          ,&numQueueEntries      ,"#entries for influxdb cache")
@@ -232,17 +233,19 @@ int parseArgs (int argc, char **argv) {
 	//mClient->topicPrefix = mqttprefix;
 
 	if (doTry==0 && serverName != NULL) {
-		if (org || token || bucket) influxapi++;
-		//if (serverName == NULL) { EPRINTF("influx server name not specified\n"); exit(1); }
-		if (influxapi == 1) {
-			if (!dbName) { EPRINTF("influxdb database name not specified\n"); exit(1); }
-		} else {
-			if (!org) { EPRINTF("influxdb org not specified\n"); exit(1); }
-			if (!bucket) { EPRINTF("influxdb bucket not specified\n"); exit(1); }
-			if (!token) { EPRINTF("influxdb token not specified\n"); exit(1); }
-			if (dbName) EPRINTF("Warning: database name ignored for influxdb v2 api\n");
-			if (userName) EPRINTF("Warning: user name ignored for influxdb v2 api\n");
-			if (password) EPRINTF("Warning: password ignored for influxdb v2 api\n");
+		if (!influxApiStr) {
+			if (org || token || bucket) influxapi++;
+			//if (serverName == NULL) { EPRINTF("influx server name not specified\n"); exit(1); }
+			if (influxapi == 1) {
+				if (!dbName) { EPRINTF("influxdb database name not specified\n"); exit(1); }
+			} else {
+				if (!org) { EPRINTF("influxdb org not specified\n"); exit(1); }
+				if (!bucket) { EPRINTF("influxdb bucket not specified\n"); exit(1); }
+				if (!token) { EPRINTF("influxdb token not specified\n"); exit(1); }
+				if (dbName) EPRINTF("Warning: database name ignored for influxdb v2 api\n");
+				if (userName) EPRINTF("Warning: user name ignored for influxdb v2 api\n");
+				if (password) EPRINTF("Warning: password ignored for influxdb v2 api\n");
+			}
 		}
 	}
 
@@ -257,7 +260,7 @@ int parseArgs (int argc, char **argv) {
 	if (doTry == 0) {
 		if (serverName) {
 			LOG(1,"Influx init: serverName: %s, port %d, dbName: %s, userName: %s, password: %s, org: %s, bucket:%s, numQueueEntries %d\n",serverName, port, dbName, userName, password, org, bucket, numQueueEntries);
-			iClient = influxdb_post_init (serverName, port, dbName, userName, password, org, bucket, token, numQueueEntries, iVerifyPeer);
+			iClient = influxdb_post_init (serverName, port, dbName, userName, password, org, bucket, token, numQueueEntries, influxApiStr, iVerifyPeer);
 		} else {
 			free(dbName);
 			free(serverName);
