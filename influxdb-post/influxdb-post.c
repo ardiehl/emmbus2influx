@@ -669,7 +669,7 @@ int post_http_send_line(influx_client_t *c, char *buf, int len, int showSendErr)
 							changeTransportProto (&c->host, proto_https);
 						else changeTransportProto (&c->host, proto_http);
 						free(c->url); c->url = NULL;
-						curl_slist_free_all(c->ch);
+						//curl_slist_free_all(c->ch);
 						curl_easy_cleanup(c->ch); c->ch = NULL;
 						return post_http_send_line(c,buf,len,showSendErr);
 					} else {
@@ -695,7 +695,7 @@ int post_http_send_line(influx_client_t *c, char *buf, int len, int showSendErr)
 				sprintf(c->url, (char *)urlFormat, c->host, c->port?c->port:8086, c->apiStr);
 				c->ch_headers = curl_slist_append(NULL,"Content-Type: text/plain; charset=utf-8");
 				curl_easy_setopt(c->ch, CURLOPT_HTTPHEADER, c->ch_headers);
-				PRINTFN("Using influxdb writer at %s",c->url);
+				/*if (showSendErr) */ PRINTFN("Using influxdb writer at %s",c->url);
 
 			} else
 			if (!c->isGrafana && c->org) {
@@ -761,14 +761,9 @@ int post_http_send_line(influx_client_t *c, char *buf, int len, int showSendErr)
 			curl_easy_setopt(c->ch,CURLOPT_VERBOSE, 0);
 			if (res) {
 				if (showSendErr) EPRINTFN("curl_ws_send to \"%s\" failed with %d (%s), closing connection",c->url,res,curl_easy_strerror(res));
-				//curl_slist_free_all(c->ch);  // sigsegv sometimes with curl 8.4.0 ??
-				//EPRINTFN("curl_slist_free_all: done");
 				curl_easy_cleanup(c->ch);
-				VPRINTFN(4,"curl_easy_cleanup: done");
 				c->ch = NULL;	// reconnect next time
-				EPRINTFN("curl_ws_send to \"%s\" closed connection",c->url);
 				free(c->url); c->url = NULL;
-				//kill(getpid(),SIGINT);	// terminate for debug
 				return -1;
 			}
 			len -= sent;
@@ -834,13 +829,13 @@ int addToQueue (influx_client_t* c) {
             t2->next=t;
         }
         if (c->numEntriesQueued==0) {
-            LOGN(0,"Beginning queueing of records due to failures posting to influxdb host (max: %d)",c->maxNumEntriesToQueue);
+            LOGN(0,"Beginning queueing of records due to failures posting to influxdb (max: %d)",c->maxNumEntriesToQueue);
         } else
             LOGN(1,"Due to failure sending data, record has been queued as #%d",c->numEntriesQueued);
         c->numEntriesQueued++;
         return 0;
     } else {
-        LOGN((c->maxNumEntriesToQueue>0),"Failed sending data and will not queue (numEntriesQueued(%d) < maxNumEntriesToQueue(%d), record lost", c->numEntriesQueued, c->maxNumEntriesToQueue);
+        //LOGN((c->maxNumEntriesToQueue>0),"Failed sending data and will not queue (numEntriesQueued(%d) < maxNumEntriesToQueue(%d), record lost", c->numEntriesQueued, c->maxNumEntriesToQueue);
         return -2;
     }
 }
@@ -852,7 +847,7 @@ int influxdb_deQueue(influx_client_t *c) {
     struct influx_dataRow_t *t;
 
     if (c->numEntriesQueued) {
-        LOGN(0,"beginning dequeing, %d remaining",c->numEntriesQueued);
+        LOGN(0,"beginning dequeing to %s, %d remaining",c->url,c->numEntriesQueued);
         do {
             //if (c->firstEntry) {}
             res = post_http_send_line(c, c->firstEntry->postData, strlen(c->firstEntry->postData),1);
@@ -864,7 +859,7 @@ int influxdb_deQueue(influx_client_t *c) {
                 numDequeued++; c->numEntriesQueued--;
                 //LOGN(0,"dequeue first: success, remaining: %d",c->numEntriesQueued);
             } else {
-                LOGN(0,"dequeue: post_http_send_line failed with %d",res);
+                LOGN(0,"dequeue: post_http_send_line to %s failed with %d",c->url,res);
                 return -1;
             }
         } while((numDequeued < INFLUX_DEQUEUE_AT_ONCE) && (res == 0) && (c->numEntriesQueued));
@@ -872,7 +867,7 @@ int influxdb_deQueue(influx_client_t *c) {
             char s[20];
             if (c->numEntriesQueued) sprintf(s,"%d left",c->numEntriesQueued);
             else strcpy(s,"=all");
-            LOGN(0,"%d entr%s (%s) dequeued and successfully posted to influxdb host",numDequeued, numDequeued > 1 ? "ies" : "y", s);
+            LOGN(0,"%d entr%s (%s) dequeued and successfully posted to %s",numDequeued, numDequeued > 1 ? "ies" : "y", s, c->url);
         }
     }
     return numDequeued;
@@ -912,9 +907,11 @@ int influxdb_post_http_line(influx_client_t* c)
 {
     int ret_code = 0, len = strlen(c->influxBuf);
 
-    ret_code = post_http_send_line(c, c->influxBuf, len, 0);	// dont show send errors
-    if (ret_code != 0 && (ret_code < 200 || ret_code >= 500))
-	ret_code = post_http_send_line(c, c->influxBuf, len, 1);	// retry and show send errors
+    //ret_code = post_http_send_line(c, c->influxBuf, len, 0);	// dont show send errors
+    //if (ret_code != 0 && (ret_code < 200 || ret_code >= 500))
+	//	ret_code = post_http_send_line(c, c->influxBuf, len, 1);	// retry and show send errors
+	ret_code = post_http_send_line(c, c->influxBuf, len, 1);
+	if (ret_code == -1) ret_code = post_http_send_line(c, c->influxBuf, len, 1);
     //printf("rc from post_http_send_line: %d\n",ret_code);
     if (ret_code != 0 && (ret_code < 200 || ret_code >= 500)) {
         if (addToQueue(c)<0) {
