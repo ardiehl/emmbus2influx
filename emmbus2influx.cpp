@@ -31,7 +31,12 @@ and send the data to influxdb (1.x or 2.x API) and/or via mqtt
 #include "parser.h"
 #include <mbus.h>
 #include "global.h"
-#include <endian.h>
+
+#ifdef __APPLE__
+#include <machine/endian.h>  // For macOS
+#else
+#include <endian.h>          // For other systems
+#endif
 
 #ifndef DISABLE_FORMULAS
 #include "muParser.h"
