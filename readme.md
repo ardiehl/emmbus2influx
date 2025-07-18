@@ -1,5 +1,10 @@
 # emmbus2influx
-## read wired M-Bus devices (Serial or TCP) and write to infuxdb (V1 or V2) and/or MQTT
+
+## Description
+
+emmbus2influx reads wired M-Bus devices (Serial or TCP) and writes to infuxdb (V1 or V2) and/or MQTT
+
+## Status
 
 Now runs for several months, problems fixed: 
 - queueing did not work when influxdb was temporary not avaiable
@@ -9,11 +14,12 @@ In case there are some memory leaks, I restart it once a month via cron jobs.
 
 I have running it on an rpi4 that is running emModbs2influx, ruuvi2influx as well as pylon2influx.
 
-### Definitions
+## Definitions
+
 - **MeterType** - a definition of the fields (from records)
 - **Meter** - a definition of a physicalM-Bus device based on a MeterType
 
-### Features
+## Features
 
  - M-Bus serial via one serial port (if you need more serial ports, you can start emmbus2Influx multiple times)
  - unlimited number of metertypes and meters
@@ -29,10 +35,11 @@ I have running it on an rpi4 that is running emModbs2influx, ruuvi2influx as wel
  - use of [ccronexpr](https://github.com/staticlibs/ccronexpr) for scheduling using cron expressions
  - paho-c and muparser can by dynamic linked (default) or downloaded, build and linked static automatically when not available on target platform, e.g. Victron Energy Cerbox GX (to be set at the top of Makefile)
 
-### Restrictions
+## Restrictions
+
 - currently only one serial M-Bus interface (=serial port) is supported (can be used by multiple Meters)
 
-### Get started
+## Get started
 
 emmbus2Influx requires a configuration file. By default ./emmbus2Influx.conf is used. You can define another config file using the
 
@@ -124,7 +131,7 @@ Long command line options requires to be prefixed with -- while as in the config
 
 ```
 
-### serial port
+## serial port
 ```
 device=/dev/ttyUSB0
 baud=2400
@@ -132,7 +139,7 @@ baud=2400
 
 Specify the serial port parameters.
 
-### InfluxDB - common for version 1 and 2
+## InfluxDB - common for version 1 and 2
 
 ```
 server=ip_or_server_name_of_influxdb_host
@@ -145,7 +152,7 @@ cache=1000
 If server is not specified, post to InfluxDB will be disabled at all (if you would like to use MQTT only). tagname will be the tag used for posting to Influxdb. Cache is the number of posts that will be cached in case the InfluxDB server is not reachable. This is implemented as a ring buffer. The entries will be posted after the InfluxDB server is reachable again. One post consists of the data for all meters queried at the same time.
 measurement sets the default measurement and can be overriden in a meter type or in a meter definition.
 
-### InfluxDB version 1
+## InfluxDB version 1
 
 For version 1, database name, username and password are used for authentication.
 
@@ -155,7 +162,7 @@ user=
 password=
 ```
 
-### InfluxDB version 2
+## InfluxDB version 2
 
 Version 2 requires bucket, org and token:
 
@@ -165,7 +172,7 @@ Version 2 requires bucket, org and token:
 --token=
 ```
 
-### MQTT
+## MQTT
 
 ```
 mqttserver=
@@ -189,7 +196,7 @@ __mqttretain__:
 
 If mqttretain is set to 1, only changes will be sent to the mqtt server.
 
-### additional options
+## additional options
 ```
 
 verbose=0
@@ -203,7 +210,7 @@ __syslog__: enables messages to syslog instead of stdout.
 __poll__: sets the poll interval in seconds
 __cron__: specifies the default poll interval in a crontab style (see schedule definition)
 
-### command line only parameters
+## command line only parameters
 ```
 --configfile=
 --syslogtest
@@ -294,7 +301,7 @@ Overrides the MQTT default for QOS and RETAIN. Default are 0 bus can be specifie
 Overrides the default from command line or config file. 0=Disable or >= 2.
 2 means we will write data to influx on every second query. Values written can be the max, min value or the average. See Options (imax,imin,iavg)
 
-### Register definitions within MeterTypes
+## Register definitions within MeterTypes
 
 for each register,
 ```"name"=recordNumber```
@@ -336,7 +343,7 @@ From my config file:
 ```
 
 
-#### Options
+### Options
 
 ```arr=name```
 This option is applicable for mqtt only and will be ignored for influx. Values will be written as an array for fields with the same name e.g.
