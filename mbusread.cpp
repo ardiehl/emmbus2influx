@@ -12,7 +12,13 @@
 #include <ctype.h>
 #include "global.h"
 #include "math.h"
-#include <endian.h>
+
+#ifdef __APPLE__
+#include <machine/endian.h>  // For macOS
+#else
+#include <endian.h>          // For other systems
+#endif
+
 #include <assert.h>
 
 #include "log.h"

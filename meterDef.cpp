@@ -5,7 +5,13 @@
 #include "argparse.h"
 #include "log.h"
 #include "mbusread.h"
-#include <endian.h>
+
+#ifdef __APPLE__
+#include <machine/endian.h>  // For macOS
+#else
+#include <endian.h>          // For other systems
+#endif
+
 #include "cron.h"
 
 extern int mqttQOS;

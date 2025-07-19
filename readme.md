@@ -32,6 +32,10 @@ I have running it on an rpi4 that is running emModbs2influx, ruuvi2influx as wel
 ### Restrictions
 - currently only one serial M-Bus interface (=serial port) is supported (can be used by multiple Meters)
 
+### Building
+
+For build instructions have a look at `build-instructions.md`.
+
 ### Get started
 
 emmbus2Influx requires a configuration file. By default ./emmbus2Influx.conf is used. You can define another config file using the

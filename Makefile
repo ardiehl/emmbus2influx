@@ -14,6 +14,9 @@ CURLSTATIC = 1
 
 TARGETS = emmbus2influx
 
+# Define a variable to hold the operating system name
+OS             := $(shell uname -s)
+
 # OS dependend executables
 WGET           = wget
 TAR            = tar
@@ -35,6 +38,17 @@ XZUNPACK       = xz -d -c
 ALLTARGETS = $(TARGETS:=$(TGT))
 
 CPPFLAGS = -fPIE -g0 -Os -Wall -g -Imqtt$(TGT)/include -Ilibmbus/mbus -Iccronexpr -DCRON_USE_LOCAL_TIME -DSML_NO_UUID_LIB
+
+ifeq ($(OS), FreeBSD)
+	CPPFLAGS += -I/usr/local/include
+	LDFLAGS += -L/usr/local/lib
+	CURLSTATIC = 0
+else ifeq ($(OS), Darwin)
+	ISYSROOT = /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
+	CPPFLAGS += -I/opt/homebrew/include -I/opt/homebrew/opt/curl/include -isysroot $(ISYSROOT)
+	LDFLAGS += -L/opt/homebrew/lib -L/opt/homebrew/opt/curl/lib
+	CURLSTATIC = 0
+endif
 
 # auto generate dependency files
 CPPFLAGS += -MMD
@@ -171,7 +185,7 @@ $(OBJDIR)/%.o: %.cpp $(MQTTLIBP) $(MUPARSERLIB) $(CURLLIB)
 
 $(ALLTARGETS): $(OBJECTS) $(SMLLIBP) $(MQTTLIBP) $(MUPARSERLIB) $(CURLLIB)
 	@echo -n "linking $@ "
-	$(CXX) $(OBJDIR)/$(patsubst %$(TGT),%,$@).o $(LINKOBJECTS) -Wall $(LIBS) -o $@
+	$(CXX) $(LDFLAGS) $(OBJDIR)/$(patsubst %$(TGT),%,$@).o $(LINKOBJECTS) -Wall $(LIBS) -o $@
 	@echo ""
 
 
