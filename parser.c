@@ -16,13 +16,13 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include "argparse.h"
-
+#include "log.h"
 
 void buf_init(buf_t * b, int allocSize) {
 	if (allocSize < 1) allocSize = 256;
 	b->buf = calloc(1,allocSize);
 	if (b->buf == NULL) {
-		fprintf(stderr,"malloc failed\n");
+		EPRINTF("malloc failed\n");
 		exit(1);
 	}
 	b->allocSize = allocSize;
@@ -36,7 +36,7 @@ void buf_addChar(buf_t * b, char c) {
 		b->allocSize = b->allocSize * 2;
 		b->buf = realloc(b->buf,b->allocSize);
 		if (b->buf == NULL) {
-			fprintf(stderr,"realloc failed\n");
+			EPRINTF("realloc failed\n");
 			exit(1);
 		}
 	}
@@ -180,17 +180,23 @@ int parserGetNextLine(parser_t * pa) {
 }
 
 
-int parserBegin (parser_t * pa, const char * fileName, int skipToSectionStart) {
+int parserBeginInt (parser_t * pa, const char * fileName, int skipToSectionStart, const char *inBuf) {
 	int rc;
 
 	free (pa->currLine); pa->currLine = NULL;
+	free (pa->fileName); pa->fileName = NULL;
 	pa->currLineNo = 0;
 	pa->col = 1;
-	if (fileName == NULL) return -1;
-	if (*fileName == 0) return -1;
-	pa->fileName = strdup(fileName);
-	pa->fh = fopen(fileName,"r");
-	if (pa->fh == NULL) return -1;
+
+	if (fileName) {
+		pa->fileName = strdup(fileName);
+		pa->fh = fopen(fileName,"r");
+		if (pa->fh == NULL) return -1;
+	}
+	if (inBuf) pa->buf = (char *)inBuf;
+
+	if ((!fileName) && (!inBuf)) return -1;
+
 	if (skipToSectionStart) {
 		rc = parserGetNextLine(pa);
 		while (rc >= 0) {
@@ -206,6 +212,18 @@ int parserBegin (parser_t * pa, const char * fileName, int skipToSectionStart) {
 	}
 
 	return rc;
+}
+
+int parserBegin (parser_t * pa, const char * fileName, int skipToSectionStart) {
+	if (fileName == NULL) return -1;
+	if (*fileName == 0) return -1;
+	return parserBeginInt(pa,fileName,skipToSectionStart,NULL);
+}
+
+int parserBeginBuf (parser_t * pa, const char * buf, int skipToSectionStart) {
+	if (!buf) return -1;
+	if (*buf == 0) return -1;
+	return parserBeginInt(pa,NULL,skipToSectionStart,buf);
 }
 
 // peek char
@@ -226,7 +244,7 @@ int gch (parser_t * pa) {
 	return rc;
 }
 
-// peer next char
+// peek next char
 int pchnext (parser_t * pa) {
 	gch(pa);
 	return pch(pa);
@@ -264,15 +282,15 @@ void parserError(parser_t *pa, const char *format, ...) {
 
 	if (pa->currLine)
 		if (*pa->currLine) {
-			fprintf(stderr,"%s\n",pa->currLine);
+			EPRINTF("%s\n",pa->currLine);
 			col = pa->col; if (col) col--;
-			for (i=0;i<col;i++) fprintf(stderr," ");
-			fprintf(stderr,"^\n");
-			for (i=0;i<col;i++) fprintf(stderr," ");
-			fprintf(stderr,"|\n");
+			for (i=0;i<col;i++) EPRINTF(" ");
+			EPRINTF("^\n");
+			for (i=0;i<col;i++) EPRINTF(" ");
+			EPRINTF("|\n");
 		}
 
-	fprintf(stderr,"%s: line %d, column %d - %s\n",pa->fileName,pa->currLineNo,pa->col,buf);
+	EPRINTF("%s: line %d, column %d - %s\n",pa->fileName,pa->currLineNo,pa->col,buf);
 	free(buf);
 	exit(1);
 }
@@ -281,7 +299,7 @@ void parserError(parser_t *pa, const char *format, ...) {
 int hexNibble (char c) {
 	if (c >= '0' && c <= '9') return c-'0';
 	if (c >='a' && c <= 'f') return c-'a'+10;
-	fprintf(stderr,"hexNibble: invalid character %c\n",c);
+	EPRINTF("hexNibble: invalid character %c\n",c);
 	exit(1);
 }
 
@@ -323,13 +341,14 @@ int parserGetToken (parser_t *pa) {
 
 	skipNoise(pa);
 	c = pch(pa);
+
 	if (c < 0) {
 		if (c == TK_EOL) parserGetNextLine(pa);
 		return c;
 	}
 
 	if (pa->charTokens == NULL) {
-		fprintf(stderr,"parser: char tokens not initialized\n");
+		EPRINTF("parser: char tokens not initialized\n");
 		exit(1);
 	}
 
@@ -356,8 +375,8 @@ int parserGetToken (parser_t *pa) {
 			return TK_SECTION;
 		}
 	}
-
-	if (c >= '0' && c <= '9') {			// number, hex/decimal integer/float
+	
+	if ((c >= '0' && c <= '9') || c == '-') {		// number, hex/decimal integer/float
 		if (c == '0') {
 			c = pchnext(pa);
 			if (c == 'x') {				// hex starting with 0x
@@ -377,6 +396,10 @@ int parserGetToken (parser_t *pa) {
 			}
 		}
 		// float or integer
+		if (c == '-') {		// negative number
+			buf_addChar(&buf,c);
+			c = pchnext(pa);
+		}
 		while((c >= '0' && c <= '9') || c == '.') {
 			buf_addChar(&buf,c);
 			if (c == '.') isFloat++;
