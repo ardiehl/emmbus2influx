@@ -65,6 +65,7 @@ struct parser_t {
 	double fVal;
 	char *strVal;
 	int firstTokenInLine;
+	char *buf;
 };
 
 
@@ -95,6 +96,15 @@ void parserFree (parser_t * pa);
  @return negative value indicates an error
  */
 int parserBegin (parser_t * pa, const char * fileName, int skipToSectionStart);
+
+/**
+ parserBeginBuf
+ @param a pointer to an initialized parser struct
+ @param null terminated text to parse
+ @param 1 to skip lines until the first line that starts with [
+ @return negative value indicates an error
+ */
+int parserBeginBuf (parser_t * pa, const char * buf, int skipToSectionStart);
 
 /**
  peek char
